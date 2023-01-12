@@ -1,0 +1,14 @@
+"left_cam, right_cam and drone_cam in laptop time",,sensors in DSpace time,,,,,,,
+"die Drei Kameras sollten also am selben Zeitpunkt das Losfahren regestriert haben, die Abweichung zwieschen alldata und den Kameras kann an unterschiedlichen Uhren in Dspace/meinem Laptop liegen.",,,,,,,,,
+,,,,,,,,,
+,,,,,,,,,
+run_id,name,start_of_recording,end_of_recording,length_of_recording,start_of_moving,framenr_som,end_of_moving,framenr_eom,length_of_moving
+0,left_cam_13_31_33,13:29:23.138531,13:33:49.638531,4:26.5,13:31:33.19,2610,13:33:06.59,4469,1:32:95
+0,right_cam_13_31_34,13:29:28.347219,13:33:47.397219,4:19.05,13:31:33.35,2508,13:33:07.00,4365,1:32.8
+0,alldata_2022_12_17-13_30_38_id0,13:30:38,13:33:13.27,2:35.27,13:31:32,None,13:33:02.9,None,1:30.9
+0,drone_cam_DJI_0450.MP4,13:30:02,13:35:29,5:27,13:31:25,2075,13:32:56,4375,1:31
+,,,,,,,,,
+3,left_cam_14_46_00,14:44:56.48,14:47:17.17,02:20.70,14:46:00.58,1281,14:47:09.03,2643,01:08.05
+3,right_cam_14_46_00,14:44:59.26,14:47:15.03,02:15.30,14:46:00.51,1225,14:47:08.56,2586,01:08.05
+3,alldata_2022_12_17-14_43_59_id3,14:43:59,14:47:23.119204,03:24.12,14:45:57,None,14:47:05,None,01:08.20
+3,drone_cam_DJI_0456.MP4,14:44:26.92,14:47:19.24,03:22.3,14:46:01.5,2360,14:47:08,4039,01:06.95
