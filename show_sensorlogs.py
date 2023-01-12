@@ -177,7 +177,7 @@ def fit_linear(in_x, out_true):
         raise Exception("could not succesfully fit data from", in_x, "to", out_true)
 
 
-def avg_pxprom_from_conekeypoints(keypoints:[(normalised_px_w, normalised_px_h)], bounding_box: (int, normalised_px_h, normalised_px_w, normalised_px_h, normalised_px_w)) -> float:
+def avg_pxprom_from_conekeypoints(keypoints:[(normalised_px_w, normalised_px_h)], bounding_box: (int, normalised_px_w, normalised_px_h, normalised_px_w, normalised_px_h)) -> float:
     # keypoints = position of keypoints on image of cone, with (0, 0) = upper left corner, (1, 0) = lower left corner, (0, 1) = upper right corner
     # bounding_box = (class, position of center of bounding_box, position of center of bounding_box, height of bounding box/image_height, width of bounding box/image_width)
     # returns avg(pixel dist between two keypoints / meter dist between two objectpoints)
@@ -191,14 +191,15 @@ def avg_pxprom_from_conekeypoints(keypoints:[(normalised_px_w, normalised_px_h)]
     objectPoints = np.array([(0,0.325), (0.087,0.21666667), (0.128,0.10833333), (0.169,0), (-0.087,0.21666667), (-0.128,0.10833333), (-0.169,0)])
 
     assert len(keypoints) == len(objectPoints) == 7
-    cls, posh, posw, sizeh, sizew = bounding_box
-    # kepoint_in_total_pixels = upper_left_corner_of_coneimg_in_toatl_pixels + keypoint*[sizew, sizeh]
-    keypoints = np.array([(h*sizeh, w*sizew) for (w, h) in keypoints])  # transform keypoints from relative position in coneimage to relative position in camera image (as only differences between keypoints are observed, the offset can be ignored)
+    cls, posw, posh, sizew, sizeh = bounding_box
+    imgsize_h, imgsize_w = (1200, 1920)
+    #keypoints_pxpos_in_camImage_from_relativepxpos_in_coneimg = np.array([((posw-0.5*sizew+w*sizew)*imgsize_w, (posh-0.5*sizeh+h*sizeh)*imgsize_h) for (w, h) in keypoints])
+    keypoints = np.array([(w*sizew*imgsize_w, h*sizeh*imgsize_h) for (w, h) in keypoints])  # transform keypoints from relative position in coneimage to relative position in camera image (as only differences between keypoints are observed, the offset can be ignored)
     avg = 0
     indexe = [(i, j) for i in range(6) for j in range(i+1, 7)]
     for (i, j) in indexe:
+        # avg += meter dist between points on real cone / pixel dist between points on cone image
         avg += abs_value(objectPoints[i]-objectPoints[j])/abs_value(keypoints[i]-keypoints[j])
-        #avg += np.sqrt((objectPoints[i][0]-objectPoints[j][0])**2+(objectPoints[i][1]-objectPoints[j][1])**2)/np.sqrt((keypoints[i][0]-keypoints[j][0])**2+(keypoints[i][1]-keypoints[j][1])**2)
     avg /= len(indexe)
     # distance to object [m] = real object size(m) * focal length (mm) / object height in frame (mm)
     #  with object height in frame (mm) = sensor height (mm) * object height (px) / sensor height (px)
@@ -867,7 +868,7 @@ def custom_pnp():
     # cone_nr: (0=blue cone, 1=yellow cone), (0=left .. 1=right), (0=top .. 1=bottom), width/img_width, height/img_height
     # cone class labels, position and size read from labels/frame_2632.txt:
     # point_of_interest_index read from comparing drone view, camara view and point_of_interest_numbers.png
-    #cones[point_of_interest_id] = (class 0=Blue, 1=Yellow, position_width, position_height, width, height)
+    # cones[point_of_interest_id] = (class 0=Blue, 1=Yellow, position_width, position_height, width, height)
     cones_camL3_2032 = {
         28: (0, 0.21848958333333332, 0.6345833333333334, 0.08802083333333334, 0.1925),
         27: (0, 0.325, 0.44083333333333335, 0.046875, 0.125),

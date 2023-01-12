@@ -162,21 +162,24 @@ def cutout_cones_yoloformat(images_dir: os.path, labels_dir: os.path, output_dir
 
 def draw_numberd_bounding_boxes(img_file: os.path, label_file: os.path):
     img = cv2.imread(str(img_file))
-    h, w, _ = img.shape
+    img_h, img_w, _ = img.shape
+    print("(h, w) = ", (img_h, img_w))
     with open(label_file) as f:
         for i, line in enumerate(f.readlines()):
-            classid, py, px, sy, sx = line.split(" ")
-            classid, px, py, sx, sy = int(classid), float(px)*h, float(py)*w, float(sx)*h, float(sy)*w
-            color = (255, 0, 0)  # ?blue
+            classid, pos_width, pos_hight, width, height = line.split(" ")
+            classid, pos_width, pos_hight, width, height = int(classid), float(pos_width)*img_w, float(pos_hight)*img_h, float(width)*img_w, float(height)*img_h
+            color = (255, 0, 0)  # blue
             if classid == 1:
-                color = (0, 255, 255)  # ?yelllow
-            cv2.rectangle(img, (int(py-0.5*sy), int(px-0.5*sx)), (int(py+0.5*sy), int(px+0.5*sx)), color, 3)
-            cv2.putText(img,f"{i}cone_{i})", (int(py), int(px)), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 1, 2)
+                color = (0, 255, 255)  # yelllow
+            cv2.rectangle(img, (int(pos_width-0.5*width), int(pos_hight-0.5*height)), (int(pos_width+0.5*width), int(pos_hight+0.5*height)), color, 3)
+            cv2.putText(img, f"{i}cone_{i})", (int(pos_width), int(pos_hight)), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 1, 2)
+    #cv2.rectangle(img, (ecke1.wpos, ecke1.hpos), (ecke2.wpos, ecke2.hpos), (255, 0, 255), 3)  # width = ecke2.wpos-ecke1.wpos
     cv2.imshow(str(img_file), img)
     cv2.waitKey(0)
 
 if __name__ == "__main__":
-    draw_numberd_bounding_boxes(img_file=pathlib.Path("C:/Users/Idefix/PycharmProjects/tmpProject/cam_footage/left_cam_14_46_00/frame_2032.jpg"), label_file=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/labels/frame_2032.txt"))
+    datasets_path = pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/")
+    draw_numberd_bounding_boxes(img_file=datasets_path/pathlib.Path("testrun_2022_12_17/cam_footage/left_cam_14_46_00/frame_2032.jpg"), label_file=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/labels/frame_2032.txt"))
     #cutout_cones_yoloformat(images_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/images"),
     #                        labels_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/labels"),
     #                        output_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/keypoints/images"))
