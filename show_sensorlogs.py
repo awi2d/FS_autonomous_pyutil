@@ -1,5 +1,6 @@
 import os
 import pathlib
+import sys
 
 import cv2
 import matplotlib.collections
@@ -115,6 +116,25 @@ def bearing_from_gps_points(a: (degree_lattitude, degree_longitude), b: (degree_
     return np.arctan2(X, Y)
 
 
+def get_at_time(x: [seconds], y: [float], t: seconds) -> float:
+    # returns the linear interpolated value of y at time t.
+    # if t in x: return y[i], so that x[i]==t
+    assert len(x) == len(y)
+    if t < x[0] or t > x[-1]:
+        print(f"warining: get_at_time: t is out of range ({x[0]}, {x[-1]}) with {t}")
+        if t < x[0]:
+            return y[0]
+        if t > x[-1]:
+            return y[-1]
+    for i in range(0, len(x)):
+        if t == x[i]:
+            return y[i]
+        if t < x[i]:
+            w0 = abs(t-x[i-1])
+            w1 = abs(x[i]-t)
+            return (w1*y[i-1]+w0*y[i])/(w0+w1)
+
+
 def timesinc(a_x: [seconds], a_y: [float], b_x: [seconds], b_y: [float]) -> ([seconds], [float], [float]):
     # return timesteps, a_y, b_y, so that (timesteps, a_y) and timesteps, b_y) are valid time-data pairs, and that a_y and b_y are as close to the input a_y and b_y as possible
     timesteps = np.array(sorted(list(set(a_x).union(set(b_x)))))
@@ -167,10 +187,9 @@ def fit_linear(in_x, out_true):
         return np.sum((fun(in_x, t) - out_true) ** 2)
     res = scipy.optimize.minimize(loss, fo)
     if res.success:
-        print("out_true = ")
         return fun, res.x
     else:
-        print("\nfailed_res = ", res)
+        print("failed_res = ", res)
         if res.x is not None:
             print("warining: fit_linear failed")
             return fun, res.x
@@ -188,18 +207,31 @@ def avg_pxprom_from_conekeypoints(keypoints:[(normalised_px_w, normalised_px_h)]
     #cone_diameter_bottom = 0.169  # (11/21)*np.sqrt(2*0.228**2)  # [m]
     #cone_diamter_dif = cone_diameter_bottom-cone_diamter_top
     #objectPoints = np.array([[0, cone_height], [cone_diamter_top+(1/3)*cone_diamter_dif, (2/3)*cone_height], [cone_diamter_top+(2/3)*cone_diamter_dif, (1/3)*cone_height], [cone_diamter_top+(3/3)*cone_diamter_dif, (0/3)*cone_height], [-cone_diamter_top-(1/3)*cone_diamter_dif, (2/3)*cone_height], [-cone_diamter_top-(2/3)*cone_diamter_dif, (1/3)*cone_height], [-cone_diamter_top-(3/3)*cone_diamter_dif, (0/3)*cone_height]])  # [[left, height, deepth]]
-    objectPoints = np.array([(0,0.325), (0.087,0.21666667), (0.128,0.10833333), (0.169,0), (-0.087,0.21666667), (-0.128,0.10833333), (-0.169,0)])
+    #objectPoints = np.array([(0,0.325), (0.087,0.21666667), (0.128,0.10833333), (0.169,0), (-0.087,0.21666667), (-0.128,0.10833333), (-0.169,0)])
+    obj_Distm = {(0, 1): 0.09931057723962547, (0, 2): 0.18581319480106973, (0, 3): 0.2893731266180254, (1, 2): 0.08783333333333333, (1, 3): 0.18816666666666668, (2, 3): 0.1, (1, 5): 0.126375, (1, 6): 0.20548663807186746, (2, 6): 0.156, (1, 4): 0.058826410187308546, (2, 5): 0.08119296009798978, (3, 6): 0.1159014116265954}
 
-    assert len(keypoints) == len(objectPoints) == 7
+    assert len(keypoints) == 7
     cls, posw, posh, sizew, sizeh = bounding_box
     imgsize_h, imgsize_w = (1200, 1920)
     #keypoints_pxpos_in_camImage_from_relativepxpos_in_coneimg = np.array([((posw-0.5*sizew+w*sizew)*imgsize_w, (posh-0.5*sizeh+h*sizeh)*imgsize_h) for (w, h) in keypoints])
     keypoints = np.array([(w*sizew*imgsize_w, h*sizeh*imgsize_h) for (w, h) in keypoints])  # transform keypoints from relative position in coneimage to relative position in camera image (as only differences between keypoints are observed, the offset can be ignored)
     avg = 0
     indexe = [(i, j) for i in range(6) for j in range(i+1, 7)]
+    print("\n")
     for (i, j) in indexe:
         # avg += meter dist between points on real cone / pixel dist between points on cone image
-        avg += abs_value(objectPoints[i]-objectPoints[j])/abs_value(keypoints[i]-keypoints[j])
+        (i, j) = (min(i, j), max(i, j))
+        if i == 0 and j > 3:
+            (i, j) = (i, j-3)
+        if i > 3 and j > 3:
+            (i, j) = (i-3, j-3)
+        if (i, j) == (2, 4):
+            (i, j) = (1, 5)
+        if (i, j) == (3, 4):
+            (i, j) = (1, 6)
+        if (i, j) == (3, 5):
+            (i, j) = (2, 6)
+        avg += obj_Distm[(i, j)]/abs_value(keypoints[i]-keypoints[j])
     avg /= len(indexe)
     # distance to object [m] = real object size(m) * focal length (mm) / object height in frame (mm)
     #  with object height in frame (mm) = sensor height (mm) * object height (px) / sensor height (px)
@@ -218,14 +250,13 @@ def plot_colorgradientline(name: str, lat_pos: [degree_lattitude], long_pos: [de
     # https://matplotlib.org/2.0.2/examples/axes_grid/demo_parasite_axes2.html
     """
     assumes x_pos, y_pos are positions of car during run and plots it and cones.
-    TODO output may be rotated pi/2
     """
     assert len(lat_pos) == len(long_pos)
     fig, (ax0) = plt.subplots(1, 1)
     cmap = plt.get_cmap('jet')
 
     #plot path
-    points = np.array([lat_pos, long_pos]).T.reshape(-1, 1, 2)
+    points = np.array([long_pos, lat_pos]).T.reshape(-1, 1, 2)
     segments = np.concatenate([points[:-1], points[1:]], axis=1)
     lc = matplotlib.collections.LineCollection(segments, array=np.linspace(0, 1, len(lat_pos)), cmap=cmap, norm=plt.Normalize(0.0, 1.0), linewidth=2, alpha=1)
     ax0.add_collection(lc)
@@ -234,34 +265,41 @@ def plot_colorgradientline(name: str, lat_pos: [degree_lattitude], long_pos: [de
     if time is not None:
         assert len(lat_pos) == len(time)
         t = time[0]
-        ax0.text(lat_pos[0], long_pos[0], str(int(time[0])) + "s", c=cmap(0))
+        ax0.text(long_pos[0], lat_pos[0], str(int(time[0])) + "s", c=cmap(0))
         for i in range(len(lat_pos)):
             dt = 10
             if time[i] > t + dt:  # plot only one number per dt seconds.
-                ax0.text(lat_pos[i], long_pos[i], str(int(time[i])) + "s", c=cmap(i / len(lat_pos)))
+                ax0.text(long_pos[i], lat_pos[i], str(int(time[i])) + "s", c=cmap(i / len(lat_pos)))
                 t += dt
-        ax0.text(lat_pos[-1], long_pos[-1], str(int(time[-1])) + "s", c=cmap(1))
+        ax0.text(long_pos[-1], lat_pos[-1], str(int(time[-1])) + "s", c=cmap(1))
     ax0.set_title(f"Path of {name}")
-    ax0.scatter(lat_pos, long_pos, s=10, c=cmap(np.linspace(0, 1, len(lat_pos))), alpha=0.5)
+    ax0.scatter(long_pos, lat_pos, s=10, c=cmap(np.linspace(0, 1, len(lat_pos))), alpha=0.5)
 
     # plot cones
-    blue_cone_gpspos = [(51.46435094, 6.73891752), (51.46439234, 6.73890195), (51.46443578, 6.73888559), (51.46448111, 6.73887495), (51.46450552, 6.73885793), (51.46452558, 6.73882434), (51.46453608, 6.73877997), (51.46453237, 6.73873413), (51.46451941, 6.73869405), (51.46449899, 6.73866492), (51.46446785, 6.73865125), (51.46444102, 6.73865578), (51.46441351, 6.7386783 ), (51.46439678, 6.73871328), (51.46438918, 6.73875276), (51.46438648, 6.73878819), (51.46437372, 6.73880444), (51.46433428, 6.73882246), (51.46429239, 6.73883876), (51.46425109, 6.73885858), (51.46420865, 6.73887348), (51.46416673, 6.73889516), (51.46412762, 6.73891144), (51.46410335, 6.73892196), (51.46407718, 6.73895792), (51.46406458, 6.7389972 ), (51.46406423, 6.73904838), (51.46407523, 6.739086 ), (51.4641015 , 6.73912413), (51.46413044, 6.73913759), (51.46415973, 6.73913479), (51.46419665, 6.73910001), (51.46421088, 6.73906493), (51.4642183 , 6.73904647), (51.46423249, 6.73902214), (51.46425719, 6.73897923), (51.46427043, 6.7389585)]
-    yellow_cone_gpspos = [(51.46430063, 6.73889679), (51.46434473, 6.73888072), (51.46438634, 6.73886453), (51.46443015, 6.73884857), (51.46447275, 6.73883092), (51.46449019, 6.73882038), (51.46450114, 6.73879893), (51.46450671, 6.73877313), (51.46450461, 6.73874601), (51.46449678, 6.73872165), (51.46448399, 6.73870461), (51.46446581, 6.7386961 ), (51.46444834, 6.73869913), (51.46443265, 6.73871275), (51.46442199, 6.73873409), (51.4644176, 6.7387632), (51.46441376, 6.73880659), (51.46440078, 6.73882883), (51.46438105, 6.73884241), (51.46436277, 6.73885167), (51.46433924, 6.73885921), (51.4642988 , 6.73887494), (51.46425576, 6.73889545), (51.46421561, 6.73891106), (51.46417415, 6.73893363), (51.46413191, 6.73895705), (51.46411412, 6.73896558), (51.46410175, 6.73898597), (51.46409406, 6.73901206), (51.46409459, 6.73904087), (51.46410229, 6.73906634), (51.46411618, 6.73908619), (51.46413477, 6.73909346), (51.46415349, 6.73909048), (51.46417373, 6.73907079), (51.4641828 , 6.73904738), (51.46419337, 6.73902178), (51.46420841, 6.73899337), (51.46422332, 6.73897145), (51.46423598, 6.73895095), (51.46425287, 6.73892612)]
+    fixpoitns_gpspos, blue_cone_gpspos, yellow_cone_gpspos, carpos, bearing = true_pos_from_droneimg_pxpos()
     for ycp in yellow_cone_gpspos:
-        ax0.scatter(ycp[0], ycp[1], c="yellow")
+        ax0.scatter(ycp[1], ycp[0], c="yellow")
     for bcp in blue_cone_gpspos:
-        ax0.scatter(bcp[0], bcp[1], c="blue")
+        ax0.scatter(bcp[1], bcp[0], c="blue")
+
+    # plot carpos (car positions from drone view)
+    for k in carpos.keys():
+        for i in range(len(carpos[k])):
+            ax0.scatter(carpos[k][i][1], carpos[k][i][0], s=5, color=cmap((k/25+27.92)/max(time)), alpha=1)
 
     # add labels and meter scaling on both axies
-    lat_pos, long_pos = gps2meter(lat_pos, long_pos, lat_pos[0], long_pos[0])
-    axLong = ax0.secondary_xaxis('top', functions=(lambda x: (x - lat_pos[0]) * 111320, lambda x: lat_pos[0] + x / 111320))
-    axLong.set_ylabel('degree East')  # TODO replace East with West when on other side of globe
-    tmp = 111320 * np.cos(lat_pos[0] * np.pi / 180)
-    axLat = ax0.secondary_yaxis("right", functions=(lambda y: (y - long_pos[0]) * tmp, lambda y: long_pos[0] + y / tmp))
-    axLat.set_xlabel("degree North")  # TODO replace North with South when on other side of globe
+    #lat_pos, long_pos = gps2meter(lat_pos, long_pos, lat_pos[0], long_pos[0])
+    tmp = 111320 * np.cos(np.average(lat_pos) * np.pi / 180)
+    long_avg = np.average(long_pos)
+    axright = ax0.secondary_yaxis('right', functions=(lambda y: (y - long_avg) * tmp, lambda y: long_avg + y / tmp))
+    axright.set_xlabel("m North")
+    lat_avg = np.average(lat_pos)
+    axtop = ax0.secondary_xaxis("top", functions=(lambda x: (x - np.average(lat_pos)) * 111320, lambda x: lat_avg + x / 111320))
+    axtop.set_ylabel('m East')
 
-    ax0.set_xlabel("m East")
-    ax0.set_ylabel("m North")
+
+    ax0.set_xlabel("Longitude")
+    ax0.set_ylabel("Lattitude")
     ax0.grid()
     fig.savefig(vis_out_path / f"{name}__path.png")
     plt.show()
@@ -587,7 +625,7 @@ def visualise_data(data: SensorDataDict):
     # BMS_SOC_UsbFlRec StateOfCharge of HV battary
     # Converter_L_N_actual_UsbFlRec is rotations/sekonds of Left back wheel
 
-    for i, k in enumerate(relevant_keys):  # TODO relevant_keys contains cam_keys, but shouldnt
+    for i, k in enumerate(relevant_keys):
         if k in cam_keys:
             print("unreachable code was reached")
             continue
@@ -781,95 +819,189 @@ def averegae_diff(data: SensorDataDict, k0, k1, nonzero_treshhold=(1, 1), t0=0.0
         print(f"averegae_diff: \n# {k0_name} / {k1_name} = {k01}\n# {k1_name} / {k0_name} = {k10}")
 
 
-def true_pos_from_droneimg_pxpos(point_file):
-    # fixed points, where coordinates in google maps and pixel frame are known
+def true_pos_from_droneimg_pxpos(point_file=None):
     gully_u_gmpos = (51.4641141, 6.7389449)
     gully_o_gmpos = (51.4644476, 6.7388095)
     well_gmpos = (51.4643793, 6.7390844)
     dach_u_gmpos = (51.4644667, 6.7389267)
     dach_o_gmpos = (51.46446872061805, 6.7389091136932295)
-    def loss_factory(a_pxpos, b_pxpos, c_pxpos, d_pxpos, e_pxpos, a_gmpos=gully_u_gmpos, b_gmpos=gully_o_gmpos, c_gmpos=well_gmpos, d_gmpos=dach_u_gmpos, e_gmpos=dach_o_gmpos):
-        def loss(t):
-            t_mat = np.array([[t[0], t[1]], [t[2], t[3]]])
-            offset = np.array([t[4], t[5]])
-            return np.sum((np.matmul(a_pxpos, t_mat)+offset - a_gmpos) ** 2) + \
-                   np.sum((np.matmul(b_pxpos, t_mat)+offset - b_gmpos) ** 2) + \
-                   np.sum((np.matmul(c_pxpos, t_mat)+offset - c_gmpos) ** 2) + \
-                   np.sum((np.matmul(d_pxpos, t_mat)+offset - d_gmpos) ** 2) + \
-                   np.sum((np.matmul(e_pxpos, t_mat)+offset - e_gmpos) ** 2)
-        return loss
-    frnr_losses = []
-    with open(point_file) as f:
-        lines = f.readlines()
-        #line[0] = C:\Users\Idefix\PycharmProjects\tmpProject\cam_footage\DJI_0456_frames\frame_2075.jpg,0.0984375#0.41015625,0.9765625#0.4296875,0.5078125#0.8583984375,0.48125#0.6181640625,0.47291666666666665#0.568359375,0.5151041666666667#0.6025390625,0.5083333333333333#0.556640625,0.5140625#0.5654296875
-        for line in lines:
-            framenr = int(line.split(",")[0].split("_")[-1].replace(".jpg", ""))
-            points_pxpos = [(float(tup.split("#")[0]), float(tup.split("#")[1])) for tup in line.split(",")[1:]]
-            gully_u_pxpos, gully_o_pxpos, well_pxpos, dach_u_pxpos, dach_o_pxpos = points_pxpos[:5]
-            frnr_losses.append((framenr, loss_factory(a_pxpos=gully_u_pxpos, b_pxpos=gully_o_pxpos, c_pxpos=well_pxpos, d_pxpos=dach_u_pxpos, e_pxpos=dach_o_pxpos), points_pxpos))
+    gps_pos_optimised = []
+    bearing = {}  # franenumber -> bearing
+    carpos = {}  # framenumber -> [(gps_lat_frontlefttire, gps_long_frontlefttire), ... frontright, rearleft, rearright]
+    if point_file is None:
+        # use stored values instead of optimising from stratch
+        gps_pos_optimised = [(51.46411414940673,6.738944977588712), (51.46444738631447,6.738809863549967), (51.464376920188684,6.739083154724557), (51.46446718888097,6.738927768062857), (51.46447029093418,6.738909215184113), (51.46433948081566,6.738858198040306), (51.464340634576544,6.738867556464109), (51.464332301312695,6.738860518358256), (51.46433352256563,6.7388693023431845), (51.46425560352164,6.738978243689988), (51.46427108152239,6.738956349310485), (51.46430420716902,6.738933864796242), (51.46434835826103,6.738916791956062), (51.46439114717442,6.738898908652391), (51.464435010009225,6.738881909437699), (51.46447785743073,6.738871411732899), (51.46450255330567,6.738853593635997), (51.464523350787786,6.738819787999573), (51.464533504173595,6.738776268215176), (51.46453037892502,6.738730218636211), (51.464517197636866,6.7386905132803125), (51.46449659091481,6.738663015861728), (51.46446663771645,6.738648698012101), (51.464438661684675,6.738653402331532), (51.46441130495734,6.738677405727721), (51.46439626718731,6.73871541407409), (51.464389944382496,6.7387554556266025), (51.46438436411264,6.738785735746747), (51.46437249221701,6.738802412049573), (51.46433474605532,6.738820935341453), (51.46429112213464,6.738838149987502), (51.46425084032891,6.738857744036035), (51.46420852749894,6.73887419245192), (51.46416856291396,6.738895720484548), (51.46412900038989,6.738912834604563), (51.46410496482645,6.738923655505124), (51.464079595253736,6.738958957232722), (51.464067119195114,6.738998752044335), (51.464066961660166,6.739049464522678), (51.46407733183846,6.739086333417893), (51.46410152721491,6.739123619222857), (51.46413179871855,6.739137612689789), (51.46415989439572,6.7391333201885475), (51.46419621559581,6.739098942910411), (51.464209958613,6.739064370135348), (51.464218071281536,6.739045220236359), (51.464230863835915,6.739022540553707), (51.464235195017565,6.73894986483897), (51.46425254304922,6.738924631810385), (51.464298461923505,6.738896452978141), (51.4643428654891,6.7388789814292425), (51.46438668534625,6.738860624573461), (51.46442779156127,6.7388451840515105), (51.46447030037779,6.7388281064257844), (51.46448691323747,6.738816478338111), (51.46449890894766,6.738795981253502), (51.46450483971843,6.738769736369862), (51.4645028126984,6.738742394083106), (51.464494201192664,6.738718220083149), (51.464480374977576,6.738700955868589), (51.46446375293953,6.738694369123524), (51.464446342496,6.7386975953166015), (51.46443094576782,6.738710948324009), (51.46442003090998,6.738732241930608), (51.46441452623774,6.738758460709004), (51.4644094765204,6.738799210265234), (51.464398695574275,6.738827028726462), (51.464380796405976,6.738840788713605), (51.4643624111585,6.738848593652515), (51.4643380159601,6.738858309555241), (51.46429508893946,6.738875725158482), (51.46425547308892,6.738894756649162), (51.464215777303274,6.738910776637766), (51.46417554371516,6.7389327114558935), (51.46413319131306,6.738958079522211), (51.46411580753114,6.73896635691615), (51.46410299161643,6.738986446365815), (51.46409511800807,6.7390122939678285), (51.46409565819885,6.739041007544318), (51.46410386007197,6.739066872605536), (51.4641179539995,6.739085351021696), (51.46413588370013,6.739092211889237), (51.464154482508064,6.739087866698141), (51.464172734232235,6.739071377317364), (51.464183024539835,6.739047157912321), (51.46419395425206,6.739020047700429), (51.46420877083953,6.738992929967574), (51.46422267511233,6.738971629815222)]
+        bearing = {}  # franenumber -> bearing
+        carpos = {}  # framenumber -> [(gps_lat_frontlefttire, gps_long_frontlefttire), ... frontright, rearleft, rearright]
 
-    # fit liner transformation t pixelPosition -> googlemapsPosition, so that t(objp)-objg for (objp, objg) in [gully_u, gully_o, well] is minimised
-    t_flat = np.array([1, 0, 0, 1, 0, 0])
+        bearing[3277] = 2.968961427232848
+        carpos[3277] = [np.array([51.46436552,  6.73881859]), np.array([51.46437026,  6.73883536]), np.array([51.46435247,  6.73882542]), np.array([51.46435753,  6.73884089])]
+        bearing[3278] = 2.9602779464288203
+        carpos[3278] = [np.array([51.46436772,  6.73881634]), np.array([51.46437299,  6.73883346]), np.array([51.4643548 ,  6.73882423]), np.array([51.4643592 ,  6.73883904])]
+        bearing[3279] = 2.946124835315508
+        carpos[3279] = [np.array([51.46436821,  6.73881693]), np.array([51.46437184,  6.73883334]), np.array([51.46435367,  6.73882403]), np.array([51.46435905,  6.73884112])]
+        bearing[3280] = 2.9530146109797033
+        carpos[3280] = [np.array([51.46436834,  6.73881453]), np.array([51.46437313,  6.73883309]), np.array([51.4643551 ,  6.73882314]), np.array([51.46435889,  6.7388389 ])]
+        bearing[3281] = 2.946952586292381
+        carpos[3281] = [np.array([51.46436901,  6.73881662]), np.array([51.46437424,  6.73883318]), np.array([51.46435623,  6.73882438]), np.array([51.46436026,  6.73883994])]
 
-    gpspos_avg = []
-    for (frnr, loss, pxposs) in frnr_losses:
-        print("frnr = ", frnr)
-        res = scipy.optimize.minimize(loss, t_flat)
-        if res.success:
-            #x: array([-7.45058060e-09,  4.99999925e-02, -5.00000075e-02, -7.45058060e-09])
-            t = res.x
-            print("res = ", t)
-            t_mat = np.array([[t[0], t[1]], [t[2], t[3]]])
-            offset = np.array([t[4], t[5]])
-            gps_pos = [np.matmul(cp, t_mat)+offset for cp in pxposs]
-            gpspos_avg.append(gps_pos)
-            print("bearing =", bearing_from_gps_points(0.5*np.array(gps_pos[5])+0.5*np.array(gps_pos[6]), 0.5*np.array(gps_pos[7])+0.5*np.array(gps_pos[8])))
-        else:
-            print("minimize failed, res = ", res)
-    gps_pos = [(51.0, 6.0)]*len(gpspos_avg[0])
-    assert len(gps_pos) == 88
-    for i in range(len(gpspos_avg[0])):
-        gps_pos[i] = (np.average([t[i][0] for t in gpspos_avg]), np.average([t[i][1] for t in gpspos_avg]))
-    # TODO fit cone positions over known distances between cones
-    print("gps_pos = ", gps_pos)
-    fixpoitns_gpspos = gps_pos[:5]
-    car_gpspos = gpspos_avg[2][5:9]
-    blue_cone_gpspos = gps_pos[9:47]
-    yellow_cone_gpspos = gps_pos[47:]
-    bearing = bearing_from_gps_points(0.5*np.array(car_gpspos[0])+0.5*np.array(car_gpspos[1]), 0.5*np.array(car_gpspos[2])+0.5*np.array(car_gpspos[3]))  # direction from middle between front wheels to middle between rear wheels
-    print("bearing =", bearing)
-    print("2m = ", abs_meter_diff(gps_pos[68], gps_pos[67]), "m")
-    for (pred_fixpoint, real_fixpoint) in zip(fixpoitns_gpspos, [gully_u_gmpos, gully_o_gmpos, well_gmpos, dach_u_gmpos, dach_o_gmpos]):
-        print("diff between real and pred fixpoint position: ", abs_meter_diff(pred_fixpoint, real_fixpoint))
-    print("car_gpspos = ", (np.average([x for (x, y) in car_gpspos]), np.average([y for (x, y) in car_gpspos])))
-    print("blue_cone_gpspos = ", str(blue_cone_gpspos).replace("array", "").replace("[", "").replace("]", ""))
-    print("yellow_cone_gpspos = ", str(yellow_cone_gpspos).replace("array", "").replace("[", "").replace("]", ""))
+        bearing[3285] = 2.9237076768264165
+        carpos[3285] = [np.array([51.46437197,  6.73881453]), np.array([51.4643759,  6.7388296]), np.array([51.46435852,  6.73882217]), np.array([51.46436241,  6.73883838])]
+        bearing[3286] = 2.8897816229067455
+        carpos[3286] = [np.array([51.46437782,  6.73881437]), np.array([51.46438212,  6.73883028]), np.array([51.46436522,  6.73882389]), np.array([51.46436875,  6.73883914])]
+        bearing[3287] = 2.89842527838584
+        carpos[3287] = [np.array([51.46437393,  6.73881364]), np.array([51.46437597,  6.73883027]), np.array([51.46436096,  6.73882209]), np.array([51.46436508,  6.7388381 ])]
+        bearing[3288] = 2.9173079070782926
+        carpos[3288] = [np.array([51.46437669,  6.73881493]), np.array([51.46438063,  6.73883012]), np.array([51.46436379,  6.73882252]), np.array([51.4643668 ,  6.73883932])]
+        bearing[3289] = 2.893820474703203
+        carpos[3289] = [np.array([51.46437515,  6.73881413]), np.array([51.46437816,  6.73882848]), np.array([51.46436231,  6.73882185]), np.array([51.4643669 ,  6.73883753])]
 
-    # calculate relative position to car in meters
-    car_gpspo = (np.average([x for (x, y) in car_gpspos]), np.average([y for (x, y) in car_gpspos]))
-    print("car_gpspos = ", car_gpspo)
+        bearing[3285] = 2.8929463838029723
+        carpos[3285] = [np.array([51.46437244,  6.73881409]), np.array([51.46437574,  6.73882946]), np.array([51.46435836,  6.73882319]), np.array([51.46436442,  6.73883811])]
+        bearing[3286] = 2.877122618598874
+        carpos[3286] = [np.array([51.4643726,  6.73881193]), np.array([51.46437625,  6.73882883]), np.array([51.46435912,  6.73882235]), np.array([51.46436479,  6.73883699])]
+        bearing[3287] = 2.95943247322537
+        carpos[3287] = [np.array([51.46437705,  6.73881457]), np.array([51.46438101,  6.73883046]), np.array([51.46436374,  6.73882187]), np.array([51.46436778,  6.73883662])]
+        bearing[3288] = 2.882140457199899
+        carpos[3288] = [np.array([51.46437303,  6.73881073]), np.array([51.46437765,  6.73882886]), np.array([51.46436074,  6.73882053]), np.array([51.46436556,  6.73883686])]
+        bearing[3289] = 2.9264352848229445
+        carpos[3289] = [np.array([51.46437642,  6.73881273]), np.array([51.46437973,  6.73882902]), np.array([51.46436385,  6.73882139]), np.array([51.46436701,  6.73883557])]
 
-    # plot gps_pos on google maps
-    gmap = CustomGoogleMapPlotter(51.4639933,  6.73884552, 25, map_type='satellite')  # making 25 larger -> smaler map cutout shown by default
-    gmap.draw("map.html")
-    gmap.color_scatter([x for (x, y) in gps_pos[:7]], [y for (x, y) in gps_pos[:8]], size=0.228, c="black")
-    gmap.color_scatter([x for (x, y) in blue_cone_gpspos], [y for (x, y) in blue_cone_gpspos], size=0.228, c="blue")
-    gmap.color_scatter([x for (x, y) in yellow_cone_gpspos], [y for (x, y) in yellow_cone_gpspos], size=0.228, c="yellow")
-    gmap.draw('map.html')
+        bearing[4027] = -0.5219724392318666
+        carpos[4027] = [np.array([51.46424249,  6.7389868 ]), np.array([51.4642347 ,  6.73897393]), np.array([51.46425172,  6.73897167]), np.array([51.46424504,  6.73895807])]
+        bearing[4028] = -0.5540929271133909
+        carpos[4028] = [np.array([51.46424116,  6.73898918]), np.array([51.46423405,  6.73897795]), np.array([51.4642514,  6.7389721]), np.array([51.46424305,  6.73896227])]
+        bearing[4029] = -0.46673446572009253
+        carpos[4029] = [np.array([51.46424119,  6.738988  ]), np.array([51.46423427,  6.73897845]), np.array([51.46425317,  6.73897375]), np.array([51.46424365,  6.7389631 ])]
+        bearing[4030] = -0.5110170587960822
+        carpos[4030] = [np.array([51.46424182,  6.73899115]), np.array([51.46423382,  6.73897752]), np.array([51.46425259,  6.73897467]), np.array([51.46424362,  6.73896227])]
+        bearing[4031] = -0.47730922186927155
+        carpos[4031] = [np.array([51.46423708,  6.73899018]), np.array([51.46423026,  6.73897946]), np.array([51.46424827,  6.73897513]), np.array([51.46424064,  6.73896382])]
+    else:
+        # calculate positions from data
+        # fixed points, where coordinates in google maps and pixel frame are known
+        def loss_factory(a_pxpos, b_pxpos, c_pxpos, d_pxpos, e_pxpos, a_gmpos=gully_u_gmpos, b_gmpos=gully_o_gmpos, c_gmpos=well_gmpos, d_gmpos=dach_u_gmpos, e_gmpos=dach_o_gmpos):
+            def loss(t):
+                t_mat = np.array([[t[0], t[1]], [t[2], t[3]]])
+                offset = np.array([t[4], t[5]])
+                return np.sum((np.matmul(a_pxpos, t_mat)+offset - a_gmpos) ** 2) + \
+                       np.sum((np.matmul(b_pxpos, t_mat)+offset - b_gmpos) ** 2) + \
+                       np.sum((np.matmul(c_pxpos, t_mat)+offset - c_gmpos) ** 2) + \
+                       np.sum((np.matmul(d_pxpos, t_mat)+offset - d_gmpos) ** 2) + \
+                       np.sum((np.matmul(e_pxpos, t_mat)+offset - e_gmpos) ** 2)
+            return loss
+        frnr_losses = []
+        with open(point_file) as f:
+            lines = f.readlines()
+            #line[0] = C:\Users\Idefix\PycharmProjects\tmpProject\cam_footage\DJI_0456_frames\frame_2075.jpg,0.0984375#0.41015625,0.9765625#0.4296875,0.5078125#0.8583984375,0.48125#0.6181640625,0.47291666666666665#0.568359375,0.5151041666666667#0.6025390625,0.5083333333333333#0.556640625,0.5140625#0.5654296875
+            for line in lines:
+                framenr = int(line.split(",")[0].split("_")[-1].replace(".jpg", ""))
+                points_pxpos = [(float(tup.split("#")[0]), float(tup.split("#")[1])) for tup in line.split(",")[1:]]
+                gully_u_pxpos, gully_o_pxpos, well_pxpos, dach_u_pxpos, dach_o_pxpos = points_pxpos[:5]
+                frnr_losses.append((framenr, loss_factory(a_pxpos=gully_u_pxpos, b_pxpos=gully_o_pxpos, c_pxpos=well_pxpos, d_pxpos=dach_u_pxpos, e_pxpos=dach_o_pxpos), points_pxpos))
+
+        # fit liner transformation t pixelPosition -> googlemapsPosition, so that t(objp)-objg for (objp, objg) in [gully_u, gully_o, well] is minimised
+        t_flat = np.array([1, 0, 0, 1, 0, 0])
+
+        gps_pos_all = {}  # framenumber -> [(gps_lat, gps_long)], index look at point_of_interest_numbers.jpg
+        for (frnr, loss, pxposs) in frnr_losses:
+            print("frnr = ", frnr)
+            res = scipy.optimize.minimize(loss, t_flat)
+            if res.success:
+                #x: array([-7.45058060e-09,  4.99999925e-02, -5.00000075e-02, -7.45058060e-09])
+                t = res.x
+                print("res = ", t)
+                t_mat = np.array([[t[0], t[1]], [t[2], t[3]]])
+                offset = np.array([t[4], t[5]])
+                gps_pos = [np.matmul(cp, t_mat)+offset for cp in pxposs]
+                gps_pos_all[frnr] = gps_pos
+                bearing[frnr] = bearing_from_gps_points(0.5*np.array(gps_pos[5])+0.5*np.array(gps_pos[6]), 0.5*np.array(gps_pos[7])+0.5*np.array(gps_pos[8]))
+                carpos[frnr] = gps_pos[5:9]
+                print(f"bearing[frnr={frnr}] =", bearing_from_gps_points(0.5*np.array(gps_pos[5])+0.5*np.array(gps_pos[6]), 0.5*np.array(gps_pos[7])+0.5*np.array(gps_pos[8])))
+                print(f"carpos[frnr={frnr}] =", str(gps_pos[5:9]).replace("array", "np.array"))
+            else:
+                print("minimize failed, res = ", res)
+        gps_pos_avg = [(51.0, 6.0)]*len(gps_pos_all[list(gps_pos_all.keys())[0]])
+        assert len(gps_pos_avg) == 88
+        for i in range(len(gps_pos_avg)):
+            gps_pos_avg[i] = (np.average([gps_pos_all[k][i][0] for k in gps_pos_all.keys()]), np.average([gps_pos_all[k][i][1] for k in gps_pos_all.keys()]))
+        gps_pos_avg = np.array(gps_pos_avg)
+        print("gps_pos_avg = [", ", ".join([f"({gp[0]},{gp[1]})" for gp in gps_pos_avg])+"]")
+
+        # fit cone positions over known distances between cones
+        cw = 0.228  # width of cone baseplate in m
+        l = 5+cw
+        kw = 3+cw
+        dists_m_const = {(0, 1): 38.28, (0, 2): 30.86, (0, 3):39.18, (0, 4):39.5, (1, 2): 20.43, (1, 3): 8.38, (1, 4): 7.25, (2, 3): 14.9, (2, 4): 15.86, (3, 4): 1.1}
+        dists_m_car = {(5, 6): 0.65, (7, 8): 0.65, (5, 7): 0.8, (6, 8): 0.8}
+        dists_m_cones = {(11, 12): l, (12, 13): l, (13, 14): l, (30, 29): l, (67, 68): 2, (49, 50): l, (50, 51): l, (49, 51):2*l, (67, 69):l, (69, 70):l,
+                   (74, 75): 2, (75, 76): 2, (76, 77): 2, (77, 78): 2, (78, 79): 2, (79, 80): 2, (80, 81): 2, (81, 82): 2, (82, 83): 2, (83, 84): 2,
+                   (36, 76): kw, (37, 77): kw, (38, 78): kw, (39, 79): kw, (40, 80): kw, (41, 81): kw, (42, 82): kw, (43, 83): kw, (44, 84): kw,
+                   (11, 49): 2.5+cw, (12, 50): 2.5+cw, (13, 51): 2.5+cw, (14, 52): 2.5+cw,
+                   (53, 54): 2, (54, 55): 2, (55, 56): 2, (56, 57): 2, (57, 58): 2, (58, 59): 2, (60, 61): 2, (61, 62): 2, (62, 63): 2, (63, 64): 2,
+                   (17, 55): kw, (18, 56): kw, (19, 57): kw, (20, 58): kw, (21, 59): kw, (22, 60): kw, (23, 61): kw, (24, 62): kw, (25, 64): kw, (26, 65): kw}
+        dists_m = {**dists_m_cones, **dists_m_const}  # replace with dist_m = dist_m_cones | dist_m_const when python version >= 3.9
+        #for (k0, k1) in dists_m.keys():
+        #    print(f"dist_m[{k0}][{k1}] = {dists_m[(k0,k1)]} = {abs_meter_diff(gps_pos[k0], gps_pos[k1])}")
+
+        def loss(flat_gps_pos):
+            dists_loss = np.sum(np.array([abs_meter_diff([flat_gps_pos[2*k0], flat_gps_pos[2*k0+1]], [flat_gps_pos[2*k1], flat_gps_pos[2*k1+1]])-dists_m[(k0, k1)] for (k0, k1) in dists_m.keys()])**2)
+            mespos_loss = np.sum([abs_meter_diff(gps_pos_avg[i], (flat_gps_pos[2*i], flat_gps_pos[2*i+1]))**2 for i in range(len(gps_pos_avg)) if i not in [5, 6, 7, 8]])
+            return dists_loss + mespos_loss
+
+        flat_gpspos = np.array([gps_pos_avg[int(i//2)][int(i%2)] for i in range(2*len(gps_pos_avg))])
+        print("constpoint_loss = ", 0)
+        print("prae_loss = ", loss(flat_gpspos))
+
+        res = scipy.optimize.minimize(loss, flat_gpspos)
+
+        res_flat_gpspos = res.x
+        print("post_loss = ", loss(res_flat_gpspos))
+        gps_pos_optimised = [(res_flat_gpspos[2*i], res_flat_gpspos[2*i+1]) for i in range(len(gps_pos_avg))]
+        #print("success = ", res.success)
+        print("gps_pos_optimised = [", ", ".join([f"({gp[0]},{gp[1]})" for gp in gps_pos_optimised])+"]")
+        print("dist(gps_pos, gps_pos_optimised) = ", [abs_meter_diff(gps, opt_gps) for (gps, opt_gps) in zip(gps_pos_avg, gps_pos_optimised)])
+
+    fixpoitns_gpspos = gps_pos_optimised[:5]
+    blue_cone_gpspos = gps_pos_optimised[9:47]
+    yellow_cone_gpspos = gps_pos_optimised[47:]
+
+    #for (pred_fixpoint, real_fixpoint) in zip(fixpoitns_gpspos, [gully_u_gmpos, gully_o_gmpos, well_gmpos, dach_u_gmpos, dach_o_gmpos]):
+    #    print("diff between real and pred fixpoint position: ", abs_meter_diff(pred_fixpoint, real_fixpoint))
+    #print("2m = ", abs_meter_diff(gps_pos_optimised[68], gps_pos_optimised[67]), "m")
+    #for k in carpos.keys():
+    #    print(f"car_gpspos[{k}] = ", (np.average([x for (x, y) in carpos[k]]), np.average([y for (x, y) in carpos[k]])))
+    #print("blue_cone_gpspos = ", str(blue_cone_gpspos).replace("array", "").replace("[", "").replace("]", ""))
+    #print("yellow_cone_gpspos = ", str(yellow_cone_gpspos).replace("array", "").replace("[", "").replace("]", ""))
+
+    plot_on_googlemap = False
+    if plot_on_googlemap:
+        # plot gps_pos on google maps
+        gmap = CustomGoogleMapPlotter(51.4639933,  6.73884552, 25, map_type='satellite')  # making 25 larger -> smaler map cutout shown by default
+        #gmap.draw("map.html")
+        gmap.color_scatter([x for (x, y) in gps_pos_optimised[:5]], [y for (x, y) in gps_pos_optimised[:5]], size=0.228, c="black")
+        for k in carpos.keys():
+            gmap.color_scatter([x for (x, y) in carpos[k]], [y for (x, y) in carpos[k]], size=0.228, c="purple")
+        gmap.color_scatter([x for (x, y) in blue_cone_gpspos], [y for (x, y) in blue_cone_gpspos], size=0.228, c="blue")
+        gmap.color_scatter([x for (x, y) in yellow_cone_gpspos], [y for (x, y) in yellow_cone_gpspos], size=0.228, c="yellow")
+        gmap.draw('map.html')
+
+    return fixpoitns_gpspos, blue_cone_gpspos, yellow_cone_gpspos, carpos, bearing
 
 
 def custom_pnp():
     #run 3 (14:46)
     # meterpos: [(meter_north, meter_east) from car to cone.]. needs to be rotated into car?/camera frame
-    gps_pos_dronefrnr4026 = [(51.46411302514282, 6.738945396217519), (51.4644492512041, 6.738808754217277), (51.46437430504386, 6.7390822768889915), (51.464467581180465, 6.738931288812057), (51.464472311557756, 6.738908162729402), (51.464240402678186, 6.738986639897405), (51.4642332100873, 6.738976278554077), (51.464251656624455, 6.7389709853710205), (51.464243224418354, 6.738961422478435), (51.46425472714641, 6.738978250487636), (51.464270518244746, 6.738956756502202), (51.46430553797542, 6.73893302286412), (51.464349860041466, 6.7389169352876905), (51.46439153266253, 6.738899681049418), (51.46443456511088, 6.738882330999433), (51.46447970835752, 6.738872180246645), (51.46450447730113, 6.738854534963233), (51.46452526987741, 6.738820886104688), (51.46453639388899, 6.738777792847605), (51.4645342381967, 6.738731746743547), (51.46452132406947, 6.738692893289229), (51.46450105295435, 6.738665084502787), (51.46447159343097, 6.738651346446481), (51.46444413019699, 6.7386554845548), (51.46441630218776, 6.738679432876914), (51.46439899018983, 6.7387137485145505), (51.464391308320515, 6.738752468447541), (51.4643870675496, 6.738787186323914), (51.46437517403077, 6.738803927277617), (51.46433570820168, 6.738822543844767), (51.46429389848968, 6.738839319389577), (51.46425238322972, 6.738858700132811), (51.46420951241025, 6.738875073053684), (51.464168778795454, 6.738896269153367), (51.46412925755003, 6.738913693731722), (51.46410495348332, 6.738924469451142), (51.46407903053556, 6.73895910892581), (51.46406580182581, 6.7389986553314625), (51.46406434037682, 6.7390498203066205), (51.46407414630052, 6.739085787397029), (51.464097945639445, 6.739123364018491), (51.464127993624274, 6.739136829814162), (51.46415615717907, 6.73913290172414), (51.464193482892085, 6.739098213341487), (51.46420782780672, 6.7390638235118825), (51.464216171461054, 6.739045727560044), (51.46422905492134, 6.739022433965454), (51.46423497530263, 6.738950434216679), (51.464252549285355, 6.738925529598186), (51.46430102739041, 6.738896505329815), (51.464343956585154, 6.738880008510016), (51.464386342410194, 6.738862507072352), (51.464429823292804, 6.738846326041899), (51.46447253778795, 6.738828831582549), (51.46448921521918, 6.738816990147411), (51.464501581184194, 6.738796717429463), (51.464507574748325, 6.738770557076393), (51.464506453228296, 6.738743871299282), (51.464498433285954, 6.738720124296127), (51.46448534337528, 6.73870344860958), (51.46446802007904, 6.7386957665950415), (51.46445082257376, 6.7386987990869045), (51.46443492058447, 6.738712687620442), (51.46442395963352, 6.7387345165129435), (51.464419423587536, 6.738762284280975), (51.46441365628741, 6.738805024677205), (51.46440100619137, 6.738828262945503), (51.464381081845566, 6.738842089145029), (51.464363060479215, 6.738850011499215), (51.46433968851172, 6.738858608890778), (51.46429862835216, 6.738875688731103), (51.46425625210237, 6.738895612311508), (51.46421580034858, 6.738911193721611), (51.464175419591925, 6.738933499223775), (51.4641323953994, 6.738958986256796), (51.46411478697131, 6.738966746565896), (51.464101552070154, 6.738986922311509), (51.46409365185444, 6.739012536863217), (51.46409364230406, 6.739040729267113), (51.46410093237682, 6.739065961404904), (51.46411437637833, 6.739085295838981), (51.464132567470585, 6.73909252720121), (51.464150859148255, 6.739089445823552), (51.46417115231365, 6.739069923215911), (51.46418132733707, 6.739046278399208), (51.464192387104355, 6.739020172088391), (51.46420757968558, 6.738993371041802), (51.46422191748015, 6.73897191352454)]
-    gps_pos_drone_frnr3287 = [(51.46411343330275, 6.738945361556195), (51.464448059269685, 6.738807784365375), (51.46437552516959, 6.73908191502686), (51.46446732938929, 6.738931588749109), (51.46447198916742, 6.7389078029748575), (51.464375110550556, 6.738814319452906), (51.464378555771574, 6.738829752529962), (51.46436216128702, 6.738822503476134), (51.4643659880403, 6.7388384948637166), (51.464255509020425, 6.738977580070828), (51.46427089328004, 6.738956283889523), (51.46430561511844, 6.738932807325379), (51.46434932335217, 6.738915850548066), (51.46439085288207, 6.738898573225474), (51.46443390494344, 6.738882095098137), (51.46447857918444, 6.738871190133833), (51.46450329981898, 6.738853603570368), (51.46452415979, 6.7388196032238215), (51.46453480807678, 6.738776557791267), (51.464532144807535, 6.738730825622125), (51.46451927950069, 6.7386915282116675), (51.464498693262065, 6.738664323445482), (51.464469080419676, 6.738649936316998), (51.46444113023269, 6.7386550476433245), (51.464413805575816, 6.738677820662845), (51.46439713101527, 6.738712794628884), (51.4643898987455, 6.738751637240279), (51.46438579582038, 6.738785750207796), (51.464373670121496, 6.738802709247746), (51.46433462911663, 6.7388216794875575), (51.46429294369925, 6.7388377225198495), (51.464251532753494, 6.738857566182119), (51.46420929393073, 6.738874249102244), (51.4641687549112, 6.738895924661253), (51.464129237997746, 6.738912519153791), (51.464104910075704, 6.738923522570195), (51.4640793611767, 6.738958822190187), (51.4640661406216, 6.738997802602336), (51.464065736649424, 6.739048977372531), (51.464075719111634, 6.739085377683329), (51.46409960806011, 6.739122497358895), (51.46412984437217, 6.739135982177013), (51.4641577632598, 6.739132105538362), (51.46419483008748, 6.739098631021041), (51.4642086423368, 6.739064268537999), (51.46421720723108, 6.739045343337395), (51.46423016138458, 6.739021543381474), (51.46423489017779, 6.738949951999781), (51.46425255507636, 6.738924538418692), (51.464300777208734, 6.738896287923213), (51.464343506727026, 6.7388797739910276), (51.46438508657925, 6.738861911593309), (51.46442888202695, 6.738845804659886), (51.46447100421993, 6.738828630745712), (51.46448831192471, 6.7388159332453785), (51.46450042012814, 6.738796345845296), (51.46450630216019, 6.738769684681749), (51.464504672249745, 6.738743242474557), (51.464496449969886, 6.738718714830959), (51.464483210351034, 6.738701487111666), (51.46446552679854, 6.738694414725515), (51.46444793083195, 6.7386978257636185), (51.46443286798556, 6.738712239736903), (51.46442216133753, 6.738733249320494), (51.46441758491153, 6.7387611589328555), (51.464412277723945, 6.738803854687172), (51.464399877168056, 6.738827010788285), (51.464380628206996, 6.738841335401789), (51.46436210519221, 6.738849114706452), (51.46433883676919, 6.738858641303985), (51.464297639541186, 6.7388750828346415), (51.46425560619234, 6.738894399074749), (51.4642158666323, 6.738910796335611), (51.464175433895015, 6.738932500073678), (51.464132739274625, 6.738957682617927), (51.464115266904535, 6.738966191981765), (51.46410238386439, 6.738986093618598), (51.46409457546108, 6.739012075044668), (51.464094391541174, 6.739039856318125), (51.46410255043677, 6.739065839688257), (51.4641160550611, 6.739084797473405), (51.46413373063626, 6.739092093875497), (51.464152318300805, 6.739089445129811), (51.4641724584237, 6.739069681650497), (51.46418231323264, 6.739045740655241), (51.46419324802829, 6.739019446820274), (51.4642079908656, 6.738992368629089), (51.464222054189385, 6.7389717065476775)]
+    gps_pos = [(51.46411414940673,6.738944977588712), (51.46444738631447,6.738809863549967), (51.464376920188684,6.739083154724557), (51.46446718888097,6.738927768062857), (51.46447029093418,6.738909215184113), (51.46433948081566,6.738858198040306), (51.464340634576544,6.738867556464109), (51.464332301312695,6.738860518358256), (51.46433352256563,6.7388693023431845), (51.46425560352164,6.738978243689988), (51.46427108152239,6.738956349310485), (51.46430420716902,6.738933864796242), (51.46434835826103,6.738916791956062), (51.46439114717442,6.738898908652391), (51.464435010009225,6.738881909437699), (51.46447785743073,6.738871411732899), (51.46450255330567,6.738853593635997), (51.464523350787786,6.738819787999573), (51.464533504173595,6.738776268215176), (51.46453037892502,6.738730218636211), (51.464517197636866,6.7386905132803125), (51.46449659091481,6.738663015861728), (51.46446663771645,6.738648698012101), (51.464438661684675,6.738653402331532), (51.46441130495734,6.738677405727721), (51.46439626718731,6.73871541407409), (51.464389944382496,6.7387554556266025), (51.46438436411264,6.738785735746747), (51.46437249221701,6.738802412049573), (51.46433474605532,6.738820935341453), (51.46429112213464,6.738838149987502), (51.46425084032891,6.738857744036035), (51.46420852749894,6.73887419245192), (51.46416856291396,6.738895720484548), (51.46412900038989,6.738912834604563), (51.46410496482645,6.738923655505124), (51.464079595253736,6.738958957232722), (51.464067119195114,6.738998752044335), (51.464066961660166,6.739049464522678), (51.46407733183846,6.739086333417893), (51.46410152721491,6.739123619222857), (51.46413179871855,6.739137612689789), (51.46415989439572,6.7391333201885475), (51.46419621559581,6.739098942910411), (51.464209958613,6.739064370135348), (51.464218071281536,6.739045220236359), (51.464230863835915,6.739022540553707), (51.464235195017565,6.73894986483897), (51.46425254304922,6.738924631810385), (51.464298461923505,6.738896452978141), (51.4643428654891,6.7388789814292425), (51.46438668534625,6.738860624573461), (51.46442779156127,6.7388451840515105), (51.46447030037779,6.7388281064257844), (51.46448691323747,6.738816478338111), (51.46449890894766,6.738795981253502), (51.46450483971843,6.738769736369862), (51.4645028126984,6.738742394083106), (51.464494201192664,6.738718220083149), (51.464480374977576,6.738700955868589), (51.46446375293953,6.738694369123524), (51.464446342496,6.7386975953166015), (51.46443094576782,6.738710948324009), (51.46442003090998,6.738732241930608), (51.46441452623774,6.738758460709004), (51.4644094765204,6.738799210265234), (51.464398695574275,6.738827028726462), (51.464380796405976,6.738840788713605), (51.4643624111585,6.738848593652515), (51.4643380159601,6.738858309555241), (51.46429508893946,6.738875725158482), (51.46425547308892,6.738894756649162), (51.464215777303274,6.738910776637766), (51.46417554371516,6.7389327114558935), (51.46413319131306,6.738958079522211), (51.46411580753114,6.73896635691615), (51.46410299161643,6.738986446365815), (51.46409511800807,6.7390122939678285), (51.46409565819885,6.739041007544318), (51.46410386007197,6.739066872605536), (51.4641179539995,6.739085351021696), (51.46413588370013,6.739092211889237), (51.464154482508064,6.739087866698141), (51.464172734232235,6.739071377317364), (51.464183024539835,6.739047157912321), (51.46419395425206,6.739020047700429), (51.46420877083953,6.738992929967574), (51.46422267511233,6.738971629815222)]
+    carpos = {3279:[np.array([51.46436821,  6.73881693]), np.array([51.46437184,  6.73883334]), np.array([51.46435367,  6.73882403]), np.array([51.46435905,  6.73884112])],
+              4029:[np.array([51.46424119,  6.738988  ]), np.array([51.46423427,  6.73897845]), np.array([51.46425317,  6.73897375]), np.array([51.46424365,  6.7389631 ])]}
     #bounding_box_file = f"C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/labels/frame_{left_cam_frnr}.txt"
 
     # cone_nr: (0=blue cone, 1=yellow cone), (0=left .. 1=right), (0=top .. 1=bottom), width/img_width, height/img_height
     # cone class labels, position and size read from labels/frame_2632.txt:
     # point_of_interest_index read from comparing drone view, camara view and point_of_interest_numbers.png
     # cones[point_of_interest_id] = (class 0=Blue, 1=Yellow, position_width, position_height, width, height)
-    cones_camL3_2032 = {
+    coneboundingboxes_camL3_2032 = {
         28: (0, 0.21848958333333332, 0.6345833333333334, 0.08802083333333334, 0.1925),
         27: (0, 0.325, 0.44083333333333335, 0.046875, 0.125),
         26: (0, 0.14557291666666666, 0.31666666666666665, 0.034895833333333334, 0.08333333333333333),
@@ -892,7 +1024,8 @@ def custom_pnp():
         64: (1, 0.52265625, 0.2941666666666667, 0.018229166666666668, 0.058333333333333334),
         65: (1, 0.8427083333333333, 0.39666666666666667, 0.040625, 0.09333333333333334)
     }
-    cones_camL3_2632 = {
+
+    coneboundingboxes_camL3_2632 = {
         46: (0, 0.478125, 0.424583, 0.051042, 0.120833),
         45: (0, 0.581771, 0.342500, 0.033333, 0.076667),
         44: (0, 0.599219, 0.302500, 0.024479, 0.063333),
@@ -927,12 +1060,16 @@ def custom_pnp():
         83: ((0.6566666666666666, 0.12666666666666668), (0.43944444444444447, 0.39222222222222225), (0.3377777777777778, 0.6133333333333333), (0.2388888888888889, 0.8866666666666667), (0.735, 0.42777777777777776), (0.7338888888888889, 0.6444444444444445), (0.7327777777777778, 0.89)),
         82: ((0.7966666666666666, 0.09222222222222222), (0.5755555555555556, 0.38), (0.47944444444444445, 0.5755555555555556), (0.35777777777777775, 0.8433333333333334), (0.9372222222222222, 0.3933333333333333), (0.9561111111111111, 0.6277777777777778), (0.9722222222222222, 0.8744444444444445)),
     }
-    datas = [(gps_pos_dronefrnr4026, cones_camL3_2632, cone_keypoints_camL3frame_2632, "d4026camL32632"), (gps_pos_drone_frnr3287, cones_camL3_2032, cone_keypoints_camL3frame_2032, "d3287camL32032")]
-    for data in datas:
-        gps_pos, cones, cone_keypoints, name = data
+    datas = [(carpos[4029], coneboundingboxes_camL3_2632, cone_keypoints_camL3frame_2632, "d4026camL32632"), (carpos[3279], coneboundingboxes_camL3_2032, cone_keypoints_camL3frame_2032, "d3287camL32032")]
+    all_true_dist = []
+    all_estfrom_dist = []
+    all_true_angle = []
+    all_estfrom_angle = []
+    for data in [datas[1]]:
+        car_gpsposes, cones, cone_keypoints, name = data
 
-        car_gpspos = (np.average([x for (x, y) in gps_pos[5:9]]), np.average([y for (x, y) in gps_pos[5:9]]))  # = (51.464243934734284, 6.7389728990192035)
-        car_bearing = bearing_from_gps_points(0.5*np.array(gps_pos[5])+0.5*np.array(gps_pos[6]), 0.5*np.array(gps_pos[7])+0.5*np.array(gps_pos[8]))
+        car_gpspos = (np.average([x for (x, y) in car_gpsposes]), np.average([y for (x, y) in car_gpsposes]))
+        car_bearing = bearing_from_gps_points(0.5*np.array(car_gpsposes[0])+0.5*np.array(car_gpsposes[1]), 0.5*np.array(car_gpsposes[2])+0.5*np.array(car_gpsposes[3]))
         blue_cone_meterpos = [gps2meter(blue_cone[0], blue_cone[1], car_gpspos[0], car_gpspos[1]) for blue_cone in gps_pos[9:47]]
         yellow_cone_meterpos = [gps2meter(yellow_cone[0], yellow_cone[1], car_gpspos[0], car_gpspos[1]) for yellow_cone in gps_pos[47:]]
         poii_cone_meterpos = {}
@@ -943,35 +1080,51 @@ def custom_pnp():
         seen_kones_poii = list(cone_keypoints.keys())  # only estimate dist for cones where keypoints could be seen
         true_dist = np.array([abs_value(poii_cone_meterpos[k]) for k in seen_kones_poii])
         true_angle = np.array([car_bearing-np.arctan2(poii_cone_meterpos[k][1], poii_cone_meterpos[k][0]) for k in seen_kones_poii])  # angle between (0, 0), poii_cone_meterpos[k] and (1, 0)
-
-        #print("blue_cones_meterpos = ", [abs_value(poii_cone_meterpos[k]) for k in cones.keys() if cones[k][0] == 0])
-        #print("yellow_cones_meterpos = ", [abs_value(poii_cone_meterpos[k]) for k in cones.keys() if cones[k][0] == 1])
-        #print("blue_cones_bearings = ", [car_bearing-np.arctan2(poii_cone_meterpos[k][1], poii_cone_meterpos[k][0]) for k in cones.keys() if cones[k][0] == 0])
-        #print("yellow_cones_bearings = ", [car_bearing-np.arctan2(poii_cone_meterpos[k][1], poii_cone_meterpos[k][0]) for k in cones.keys() if cones[k][0] == 1])
+        all_true_dist += list(true_dist)
+        all_true_angle += list(true_angle)
 
         est_from = np.array([avg_pxprom_from_conekeypoints(keypoints=cone_keypoints[k], bounding_box=cones[k]) for k in seen_kones_poii])
+        all_estfrom_dist += list(est_from)
         fun, parameters = fit_linear(in_x=est_from, out_true=true_dist)
         estimated_dist = fun(est_from, parameters)
         print("\nest_from = ", est_from)
         print("true_dist     =", true_dist)
         print("fun(est_from) =", estimated_dist)
-        print(f"dist from cer_center to cone in m (from {name}) = {parameters}, with in_x = cone_keypoints_dist")
+        print(f"parameters[{name}] = {parameters}, with in_x = cone_keypoints_dist")
         print("diff_dist = ", np.sqrt(np.sum((estimated_dist-true_dist)**2)))
-        # dist from cer_center to cone in m (from d4026camL32632) = [ 7.33152206e-01 -2.66939932e-03 -4.20920790e+00  1.72220954e-01], with in_x = cone_keypoints_dist
-        # diff_dist =  0.9671244345039963
-        # dist from cer_center to cone in m (from d3287camL32032) = [ -0.92762636   0.05180094 -28.79854389  12.43325527], with in_x = cone_keypoints_dist
-        # diff_dist =  1.2287946537127332
 
-        #est_from = np.array([cones[k][1] for k in seen_kones_poii])
-        #fun, parameters = fit_linear(in_x=est_from, out_true=true_dist)
-        #est_angle = fun(est_from, parameters)
-        #print("\ncones_bearings  = ", true_angle)
-        #print("est_cones_angle = ", est_angle)
-        #print(f"angle between forward and (car_center to cone) (from {name}) = {parameters}, with in_x = boundingBox width")
-        #print("diff_angle = ", np.sqrt(np.sum((est_angle-true_angle)**2)))
-        # angle between forward and (car_center to cone) (from (drone_frnr=3287, left_cam_frnr=2032)) = (1.7828360556911504*in_x + -0.23285049029486035*in_x**2 + 0.03490832040070022/in_x + -0.3937990835174678), with in_x = boundingBox width
-        # angle between forward and (car_center to cone) (from (drone_frnr=3287, left_cam_frnr=2032)) = (-0.675268357460222*in_x + 0.8233978083460988*in_x**2 + 0.14202545332300126/in_x + 3.6009788629377852), with in_x = boundingBox width
-        # diff = 0.2136754149122912
+        est_from = np.array([cones[k][1]-0.5*cones[k][3]+cones[k][3]*np.average(np.array([cone_keypoints[k][i][0] for i in range(7)])) for k in seen_kones_poii])
+        all_estfrom_angle += list(est_from)
+        fun, parameters = fit_linear(in_x=est_from, out_true=true_dist)
+        est_angle = fun(est_from, parameters)
+        print("\ncones_bearings  = ", true_angle)
+        print("est_cones_angle = ", est_angle)
+        print(f"parameters[{name}] = {parameters}, with in_x = width position of first keypoint on cone")
+        print("diff_angle = ", np.sqrt(np.sum((est_angle-true_angle)**2)))
+
+    all_true_dist = np.array(all_true_dist)
+    all_estfrom_dist = np.array(all_estfrom_dist)
+    fun, parameters = fit_linear(in_x=all_estfrom_dist, out_true=all_true_dist)
+    estimated_dist = fun(all_estfrom_dist, parameters)
+    print("\nall_est_from_dist = ", all_estfrom_dist)
+    print("all_true_dist     =", all_true_dist)
+    print("fun(all_est_from_dist) =", estimated_dist)
+    print(f"parameters = {parameters}, with in_x = cone_keypoints_dist")
+    print("total_diff_dist = ", np.sqrt(np.sum((estimated_dist-all_true_dist)**2)))
+    # parameters = [ 2.06350268e+03  2.99755291e+01  2.57930663e-03 -2.28852681e+00], with in_x = cone_keypoints_dist
+    # total_diff_dist =  3.2965310164315325
+
+    all_true_angle = np.array(all_true_angle)
+    all_estfrom_angle = np.array(all_estfrom_angle)
+    fun, parameters = fit_linear(in_x=all_estfrom_angle, out_true=all_true_angle)
+    estimated_angle = fun(all_estfrom_angle, parameters)
+    print("\nall_est_from_angle=", all_estfrom_angle)
+    print("all_true_angle      =", all_true_angle)
+    print("fun(all_est_from_angle) =", estimated_angle)
+    print(f"parameters = {parameters}, with in_x = width position of first keypoint on cone")
+    print("total_diff_angle = ", np.sqrt(np.sum((estimated_angle-all_true_angle)**2)))
+    #parameters = [-5.14513443  4.46082258 -0.10399315  1.74553475], with in_x = width position of first keypoint on cone
+    #total_diff_angle =  0.9507291891244651
 
 
 def get_path(data: SensorDataDict):
@@ -1022,33 +1175,8 @@ def get_path(data: SensorDataDict):
     return timesteps, xp, yp
 
 
-def show_sensorlogs():
-    """
-     method for showing data from testruns.
-     if only the .mat files recorded at that day exist, merge the different files that contain data from the same testrun and save the merged data in .csv files.
-     else load from these .csv files
-     visualisation is saved to vis_out_path
-    """
-    # real_motor_torque = 0.83*my_dict["Converter_L_Torque"]?*efficency  # 0.83 = motor_konstante from https://uni-duisburg-essen.sciebo.de/apps/files/?dir=/eTeam%20-%20Technik/06_A40-04/10_Datenbl%C3%A4tter&fileid=1101973513#pdfviewer
-    # ax = real_motor_torque/(radius*mass)
-    if len(csv_files) > 0:  # check if csv files already exist
-        print("read data from csv files ", csv_files)
-        my_dicts = [read_csv(csv_files_dir / csv_file) for csv_file in csv_files[:1]]  # TODO remove [:1] to read all csv files
-        # my_dicts = [read_csv(csv_files_dir+csv_files[0])]
-    else:
-        print("read and merge data from mat files")
-        my_dicts = read_mats(mat_files_dir)
-        print("\n\n\n")
-        print("save data to csv files")
-        counter = 0
-        for data in my_dicts:
-            write_csv(f"{csv_files_dir}/alldata_{data[startTimestamp_key].strftime(time_format_str)}_id{counter}.csv",
-                      data)
-            counter += 1
-    print("\n\n\n")
-    print("merged data to ", len(my_dicts), " runs of length ", [data[length_key] for data in my_dicts])
-    print("\n\n\n")
-
+def plot_from_pos_and_sensor():
+    my_dicts = [read_csv(csv_files_dir / csv_file) for csv_file in csv_files]
     run = my_dicts[0]
     n = 1000  # number of entries per Seconds
     heading_y = run["GNSS_heading_UsbFlRec"]
@@ -1126,8 +1254,38 @@ def show_sensorlogs():
     axe.legend()
     axe.grid()
     plt.show()
-    #for data in my_dicts:
-        #visualise_data(data)
+
+
+def show_sensorlogs():
+    """
+     method for showing data from testruns.
+     if only the .mat files recorded at that day exist, merge the different files that contain data from the same testrun and save the merged data in .csv files.
+     else load from these .csv files
+     visualisation is saved to vis_out_path
+    """
+    # real_motor_torque = 0.83*my_dict["Converter_L_Torque"]?*efficency  # 0.83 = motor_konstante from https://uni-duisburg-essen.sciebo.de/apps/files/?dir=/eTeam%20-%20Technik/06_A40-04/10_Datenbl%C3%A4tter&fileid=1101973513#pdfviewer
+    # ax = real_motor_torque/(radius*mass)
+    if len(csv_files) > 0:  # check if csv files already exist
+        print("read data from csv files ", csv_files)
+        my_dicts = [read_csv(csv_files_dir / csv_file) for csv_file in csv_files[2:]]  # TODO remove [2:] to read all csv files
+        # my_dicts = [read_csv(csv_files_dir+csv_files[0])]
+    else:
+        print("read and merge data from mat files")
+        my_dicts = read_mats(mat_files_dir)
+        print("\n\n\n")
+        print("save data to csv files")
+        counter = 0
+        for data in my_dicts:
+            write_csv(f"{csv_files_dir}/alldata_{data[startTimestamp_key].strftime(time_format_str)}_id{counter}.csv",
+                      data)
+            counter += 1
+    print("\n\n\n")
+    print("merged data to ", len(my_dicts), " runs of length ", [data[length_key] for data in my_dicts])
+    print("\n\n\n")
+
+
+    for data in my_dicts:
+        visualise_data(data)
 
 
 # averegae_diff of 13:31:
@@ -1140,23 +1298,65 @@ def show_sensorlogs():
 
 
 def get_synced_frame(camL3_frame):
-    camL3_starttime = datetime.datetime.fromisoformat("2022-12-17 14:46:00.260377")
+    camL3_starttime = datetime.datetime.strptime("2022-12-17 14:44:56.48", "%Y-%m-%d %H:%M:%S.%f")
     camL3_somframe = 1281
     camL3_eomframe = 2643
-    drone3_starttime = datetime.datetime.fromisoformat("2022-12-17 14:46:01.299956")
+    drone3_starttime = datetime.datetime.strptime("2022-12-17 14:44:26.92", "%Y-%m-%d %H:%M:%S.%f")
     drone3_somframe = 2360
     drone3_eomframe = 4039
-    print("from starttime: ", 25*(camL3_frame/20+(drone3_starttime-camL3_starttime).total_seconds()))
-    print("from som: ", drone3_somframe + 25*(camL3_frame-camL3_somframe)/20)
-    print("from eom: ", drone3_eomframe - 25*(camL3_eomframe-camL3_frame)/20)
+    # camL3_starttime+camL3_frame/20 == drone3_starttime+drone3_frame/25
+    # drone3_fram = 25*(camL3_starttime+camL3_frame/20-drone3_starttime)
+    from_starttime = 25*(camL3_starttime+datetime.timedelta(seconds=camL3_frame/20)-drone3_starttime).total_seconds()
+    from_som = drone3_somframe + 25*(camL3_frame-camL3_somframe)/20
+    from_eom = drone3_eomframe - 25*(camL3_eomframe-camL3_frame)/20
+    print(f"\ndrone3 start from from camL3_frame={camL3_frame}")
+    print("time = ", camL3_starttime+datetime.timedelta(seconds=camL3_frame/20))
+    print("from starttime: ", from_starttime)
+    print("from som: ", from_som)
+    print("from eom: ", from_eom)
+    l = [from_starttime, from_som, from_eom]
+    print("avg: ", np.average(l))
+    print("meadian: ", sorted(l)[1])
+
+
+def print_synced_pos_bearing_from_drone_and_sensors():
+    fixpoitns_gpspos, blue_cone_gpspos, yellow_cone_gpspos, carpos, bearing = true_pos_from_droneimg_pxpos()
+    sensor_data = read_csv(csv_files_dir / "alldata_2022_12_17-14_43_59_id3.csv")
+    td = 27.92  # seconds that sensor_data started recording before drone3
+    for k in bearing.keys():
+        #"GNSS_heading_UsbFlRec", "GNSS_latitude_UsbFlRec", "GNSS_longitude_UsbFlRec"
+        gps_heading = get_at_time(sensor_data["GNSS_heading_UsbFlRec"+x_ending], sensor_data["GNSS_heading_UsbFlRec"], k/25+td)
+        print(f"gps_heading.at({k/25+td}) = {gps_heading} = {(bearing[k]+np.pi)*180/np.pi} = bearing[{k}]")
+    for k in carpos.keys():
+        gps_lat = get_at_time(sensor_data["GNSS_latitude_UsbFlRec"+x_ending], sensor_data["GNSS_latitude_UsbFlRec"], k/25+td)
+        gps_long = get_at_time(sensor_data["GNSS_longitude_UsbFlRec"+x_ending], sensor_data["GNSS_longitude_UsbFlRec"], k/25+td)
+        carposition = (np.average([lat for (lat, lon) in carpos[k]]), np.average([lon for (lat, lon) in carpos[k]]))
+        #print(f"sensor_data.gps[{k/25+td}] = {(gps_lat, gps_long)}, \tcarpos[k] = {carposition}")
+        print(f"abs meter diff between sensor_data.gps[{k/25+td}] and carpos[{k}] = ", abs_meter_diff((gps_lat, gps_long), carposition))
+
+
+def visual_pipeline(frame_path):
+    bounding_boxes = [(0, 0.5, 0.5, 0.2, 0.2)]
+    bearing = 0
+    car_pos = (0, 0)
+    detections = []
+    for bb in bounding_boxes:
+        keypoints = [(0.5, 0), (0.4, 0.3), (0.3, 0.6), (0.2, 0.9), (0.6, 0.3), (0.7, 0.6), (0.8, 0.9)]
+        mpropx = avg_pxprom_from_conekeypoints(keypoints, bb)
+        dist = 2063.50268e+03*mpropx+29.9755291*mpropx**2+2.57930663e-03/mpropx-2.28852681e+00
+        width_pxpos = bb[1]-0.5*bb[3]+bb[3]*np.average(np.array([keypoints[i][0] for i in range(7)]))
+        heading = 1*width_pxpos+0-bearing
+        # heading = 0 -> cone is in front of car
+        # heading = pi/2 -> cone is right of car
+        (front, right) = (dist*np.cos(heading), dist*np.sin(heading))  # TODO is not left/right, cause bearing of car already integreated
+        detections.append((front, right))
+    cone_pos = [(car_pos[0]+x, car_pos[1]+y) for (x, y) in detections]
+    #TODO plot cone_pos and match with true_cone_pos
 
 
 if __name__ == "__main__":
     # (take bearing for left wheels and right wheels, then average) is not equal to (take average of front wheels and back wheels, then bearing)
-    #TODO StartOfMoving doesnt match on run 3 (run 1 unchecked)
-    # camL3: from 2022-12-17 14:46:00.260377 to 2022-12-17 14:47:08.360377 (length = 68.1)
-    # camR3: from 2022-12-17 14:46:00.495678 to 2022-12-17 14:47:08.545678 (length = 68.05)
-    # drone3: from 2022-12-17 14:46:01.299956 to 2022-12-17 14:47:08.459956 (length = 67.16
-    custom_pnp()
+    #custom_pnp()
+
     #true_pos_from_droneimg_pxpos("C:/Users/Idefix/PycharmProjects/datasets/keypoints/droneview_annotations.csv")
-    #show_sensorlogs()
+    show_sensorlogs()
