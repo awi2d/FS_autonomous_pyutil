@@ -1,5 +1,6 @@
-#copied from https://github.com/ayush111111/cone_keypoint_regression/blob/master/keypoint_regression80.ipynb
+#cloned from https://github.com/ayush111111/cone_keypoint_regression/blob/master/keypoint_regression80.ipynb
 #and slightly changed.
+import random
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -15,8 +16,9 @@ import tf2onnx
 from util import getType
 
 dataset_dir = "C:/Users/Idefix/PycharmProjects/datasets/keypoints/"
-labels_file = dataset_dir+"annotations_tmp.csv"
-targetSize = (80,80)
+labels_file = dataset_dir+"cone_annotations.csv"
+save_dir = "training_1/"
+targetSize = (80,80)  # TODO set target size to average size of cone_bounding_box s
 
 
 def get_scale(orig_im_size ,targetSize):
@@ -68,14 +70,16 @@ def read_data():
 
     # read images
     inputImages = []
-    for filename in [dataset_dir+fn for fn in y_dat[0]]:
+    for filename in [(dataset_dir+fn).replace("//", "/") for fn in y_dat[0]]:
         img = cv2.imread(filename)
-        #imread as grayscale
+        if img is None:
+            print("filename = ", filename, " could not be read")
+        else:
+            img = cv2.resize(img, targetSize)
+            inputImages.append(img)#.reshape(targetSize[0],targetSize[1],1))
 
-        img = cv2.resize(img, targetSize)
-        inputImages.append(img)#.reshape(targetSize[0],targetSize[1],1))
-
-    cv2.imshow("img", inputImages[1])
+    #cv2.imshow("img", inputImages[1])
+    #cv2.waitKey(0)
     #plt.imshow(inputImages[1])
 
     images = np.array(inputImages, dtype='float32')
@@ -83,14 +87,15 @@ def read_data():
     # process Labels
     y_dat = pd.DataFrame(y_dat.values[:], columns=header)
     print("y_dat.columns = ", y_dat.columns)
-    y_clipped = y_dat[y_dat.columns[2:]]  # y_dat.columns[2:-1] = ndex(['top', 'mid_L_top', 'mid_R_top', 'mid_L_bot', 'mid_R_bot', 'bot_L', 'bot_R], dtype='object')
+    y_clipped = y_dat[y_dat.columns[1:]]
     #y_clipped = labels without filenames and URI
     #y_dat.drop(y_dat.index[0])
 
     inpKeypointsX = pd.DataFrame()
     inpKeypointsY = pd.DataFrame()
     for column in y_clipped.columns:
-        temp = y_clipped[column].str.strip('[]').str.split(",", expand=True)
+        temp = y_clipped[column].str.strip('[]').str.split("#", expand=True)
+        #print("tmp = ", len(temp), ":", temp)
         inpKeypointsX[column+'_x'] = temp[0]
         inpKeypointsY[column+'_y'] = temp[1]
     #print("inpKeypointsX", inpKeypointsX)  # subset of y_clipped, where only the x_variables exist
@@ -211,10 +216,10 @@ def read_data():
     keypts_final = np.concatenate((keypts_final, inc_intensity_keypts_arr))
     keypts_final = np.concatenate((keypts_final, dec_intensity_keypts_arr))
 
-    images_final =  np.concatenate((images, flipped_images_arr))
-    images_final =  np.concatenate((images_final, rotated_images_arr))
-    images_final =  np.concatenate((images_final, inc_intensity_images_arr))
-    images_final =  np.concatenate((images_final, dec_intensity_images_arr))
+    images_final = np.concatenate((images, flipped_images_arr))
+    images_final = np.concatenate((images_final, rotated_images_arr))
+    images_final = np.concatenate((images_final, inc_intensity_images_arr))
+    images_final = np.concatenate((images_final, dec_intensity_images_arr))
 
 
     return images_final, keypts_final
@@ -305,15 +310,16 @@ def train(model, images, keypts):
     batch_size = 128
     optimizer = tf.keras.optimizers.Adam(lr)
     metrics = tf.keras.metrics.MeanSquaredError()
-    save_dir = "training_1/"
 
     model.compile(loss=TrialCrossRatioLoss, optimizer=optimizer, metrics=[metrics])
 
     logdir = os.path.join("logs", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     tensorboard_callback = tf.keras.callbacks.TensorBoard(logdir, histogram_freq=1)
 
-    checkpoint = tf.keras.callbacks.ModelCheckpoint(filepath=save_dir+"checkpoint_best.ckpt", save_weights_only=True, verbose=1, save_best_only=True)
-    hist = model.fit(X_train, y_train, epochs=150, validation_data=(X_test, y_test), batch_size = batch_size, callbacks=[checkpoint], shuffle=True, verbose=1)
+    checkpoint = tf.keras.callbacks.ModelCheckpoint(filepath=save_dir+"checkpoint_best.ckpt", save_weights_only=False, verbose=1, save_best_only=True)
+    patience = tf.keras.callbacks.EarlyStopping(monitor='val_loss', min_delta=0, patience=10, verbose=0, mode='auto', baseline=None, restore_best_weights=False, start_from_epoch=0)
+
+    hist = model.fit(X_train, y_train, epochs=150, validation_data=(X_test, y_test), batch_size=batch_size, callbacks=[checkpoint, patience], shuffle=True, verbose=1)
     print("hist = \n", hist)
     model.save(save_dir+"trained_keypoint_regression_model.h5")
 
@@ -327,21 +333,34 @@ def predict(model, img):
 
 def main():
     #train
-    images, keypts = read_data()
     model = get_Model()
-    model.load_weights("training_1/trained_keypoint_regression_model.h5") # optionally load pretrained weights
+    #model.load_weights(save_dir+"trained_keypoint_regression_model.h5")  # optionally load pretrained weights
+    model.load_weights(save_dir+"checkpoint_best.ckpt")  # load best checkpoint
+    images, keypts = read_data()
+    print("len(images) = ", len(images))
     #model.summary()
 
     #TODO train with more & better images
-    #train(model, images, keypts)
+    train(model, images, keypts)
 
     fig = plt.figure(figsize=(10, 10))
-    predictions = predict(model, images[:25])
-    for id in range(25):
-        fig.add_subplot(5, 5, id + 1, xticks=[], yticks=[])
-        plot_keypoints(images[id], predictions[id])
+
+    n = 5
+    show_imgs = np.array(random.sample(list(images), n**2))
+    predictions = predict(model, show_imgs)
+    for id in range(n**2):
+        fig.add_subplot(n, n, id + 1, xticks=[], yticks=[])
+        plot_keypoints(show_imgs[id], predictions[id])
     plt.show()  # model kinda works, but points are way to scatterd
     input_signature = [tf.TensorSpec([None, targetSize[0], targetSize[1], 3], tf.float32, name='x')]
     onnx_model, _ = tf2onnx.convert.from_keras(model, input_signature, opset=13)
-    onnx.save_model(onnx_model, "keypoint_regression_best.onnx")
+    onnx.save_model(onnx_model, save_dir+"keypoint_regression_best.onnx")
 
+if __name__=="__main__":
+    lines = []
+    with open("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cone_annotations.csv", 'r') as f:
+        lines = f.readlines()
+    lines = [line.replace("\\", "/").replace("C:/Users/Idefix/PycharmProjects/datasets/keypoints/", "/") for line in lines]  # C:\Users\Idefix\PycharmProjects\datasets\keypoints\images\cone_1000.jpg
+    with open("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cone_annotations.csv", 'w') as f:
+        f.writelines(lines)
+    main()

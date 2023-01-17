@@ -10,7 +10,7 @@ import datetime
 import matplotlib.pyplot as plt
 from util import getType
 
-Basler_cameraMatrix = [[1.55902258e+03, 0, 1.03564443e+03], [0, 1.49628271e+03, 6.89322561e+02], [0, 0, 1]]  # no change by changing object points to refelct size of chessboard
+Basler_cameraMatrix = [[1.55902258e+03, 0, 1.03564443e+03], [0, 1.49628271e+03, 6.89322561e+02], [0, 0, 1]]  # no change by changing object points to reflect size of chessboard
 Basler_dist = [[-2.42797289e-01, 9.77514487e-02, -8.00761502e-05, 5.61321688e-03, 1.08419697e-02]] # opencv: [k1, k2, p1, p2, k3]
 
 
@@ -469,10 +469,12 @@ def vidoe2frames(video_path, frames_dir):
 
 
 if __name__ == "__main__":
-    for v in ["cam_footage/DJI_0450.MP4", "cam_footage/DJI_0452.MP4", "cam_footage/DJI_0456.MP4"][2:3]:
-        sname = v.split("/")[-1].split(".")[0]+"_frames"
-        print("sname = ", sname)
-        vidoe2frames(v, "cam_footage/"+sname)
+    lines = []
+    with open("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cone_annotations.csv", 'r') as f:
+        lines = f.readlines()
+    lines = [line.replace("\\", "/").replace("C:/Users/Idefix/PycharmProjects/datasets/keypoints/", "/") for line in lines]  # C:\Users\Idefix\PycharmProjects\datasets\keypoints\images\cone_1000.jpg
+    with open("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cone_annotations2.csv", 'w') as f:
+        f.writelines(lines)
     #test_myPnP()
     #show_synscreen()
     #test_solvePnPRansac()
