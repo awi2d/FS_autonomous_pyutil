@@ -20,9 +20,13 @@ def getType(x):
         return r[:-2] + '>'
     if name == 'dict':
         r = "{"+str(len(x.keys()))+":"
-        for key in x.keys():
-            #r += getType(key+": "+getType(x[key])+"; "  # would be more in line with other types
-            r += str(key)+": "+getType(x[key])+"; "  # contains more information
+        if len(x.keys()) < 10:
+            for key in x.keys():
+                r += str(key)+": "+getType(x[key])+"; "  # contains more information
+        else:
+            # assume all keys and values have same type
+            key = list(x.keys())[0]
+            r += getType(key)+": "+getType(x[key])
         r = r[:-1]+" }"
         return r
     if name == 'dict_keys':

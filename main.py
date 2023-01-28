@@ -469,11 +469,17 @@ def vidoe2frames(video_path, frames_dir):
 
 
 if __name__ == "__main__":
+    for i in range(1280, 2643):
+        if not i%5==2:
+            fn = f"camL3_frame_{i}.jpg"
+            img = cv2.imread(f"C:/Users/Idefix/PycharmProjects/datasets/testrun_2022_12_17/cam_footage/left_cam_14_46_00/{fn}")
+            cv2.imwrite(f"C:/Users/Idefix/PycharmProjects/OpenLabeling/main/input/{fn}", img)
+    exit(0)
     lines = []
-    with open("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cone_annotations.csv", 'r') as f:
+    with open("C:/Users/Idefix/PycharmProjects/datasets/keypoints/droneview_annotations.csv", 'r') as f:
         lines = f.readlines()
     lines = [line.replace("\\", "/").replace("C:/Users/Idefix/PycharmProjects/datasets/keypoints/", "/") for line in lines]  # C:\Users\Idefix\PycharmProjects\datasets\keypoints\images\cone_1000.jpg
-    with open("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cone_annotations2.csv", 'w') as f:
+    with open("C:/Users/Idefix/PycharmProjects/datasets/keypoints/droneview_annotations2.csv", 'w') as f:
         f.writelines(lines)
     #test_myPnP()
     #show_synscreen()
