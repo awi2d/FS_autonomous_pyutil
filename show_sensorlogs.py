@@ -8,7 +8,6 @@ import datetime
 import matplotlib.pyplot as plt
 import scipy.optimize
 
-from plot_on_googlemaps import CustomGoogleMapPlotter
 from util import getType, plot_and_save
 import gps_util
 
@@ -1061,6 +1060,7 @@ def true_pos_from_droneimg_pxpos(point_file=None) -> ([gps_util.gps_pos_radiant]
 
 
 def plot_on_googlemaps(points: gps_util.gps_pos_radiant):
+    from plot_on_googlemaps import CustomGoogleMapPlotter
     gmap = CustomGoogleMapPlotter(51.4639933,  6.73884552, 25, map_type='satellite')  # making 25 larger -> smaler map cutout shown by default
     #gmap.draw("map.html")
     r2d = 180/np.pi
@@ -1825,6 +1825,7 @@ def all_functions():
     show_sensorlogs()
     plot_from_pos_and_sensor()
     plot_cones()
+    plot_on_googlemaps()
     # manuel
     get_laptoptimes_for_camFrames()
     get_car_moves_starttime_from_sensors()
