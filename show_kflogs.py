@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from scipy import optimize
 from os import listdir
 from os.path import isfile, join
-
+from util import getType, plot_and_save
 
 data = [{}]  # data[k] = {"time": value, "true_X": value, ...}
 time = []
@@ -11,8 +11,9 @@ time = []
 
 def plot_timepoints(name: str, labels):
     global data, time
-    points = [[d[name] for name in labels] for d in data]
-    plot_custompoints(name, points, labels)
+    #points = [[d[name] for name in labels] for d in data]
+    #plot_custompoints(name, points, labels)
+    plot_and_save(name, time, [[d[n] for d in data] for n in labels], save_dir=f"kf_logs_visout/{name}.png", names=labels)
 
 
 def plot_custompoints(name: str, points, labels):
@@ -267,9 +268,10 @@ def run():
     # 'srr:  2022-10-27 23:45:03, use_pred=False, use_gps=False, use_imu=True, use_rh=False, use_u=False, use_pseudo=False.']
 
     global data, time
-    filename = "kf_log2022-11-13_20-46-58"
-    filename.replace(".csv", "")
-    data = readfile("C:/Users/Idefix/CLionProjects/velocity_estimator/logs/"+filename+".csv")
+    filename = "kf_log2023-02-01_15-21-21.csv"
+    filename = filename.replace(".csv", "")
+    data = readfile("C:/Users/Idefix/CLionProjects/state_estimator/logs/"+filename+".csv")
+    print("getType(data) =", getType(data))
     print("coloumnames = ", data[0].keys())
     #['time',
     # 'gps_c', 'imu_c', 'rh_ch', 'u_chd',
@@ -283,20 +285,18 @@ def run():
     print("data.size = ", len(data), "x", len(data[0]))
     time = [d["time"] for d in data]
 
-    #find()
-    #exit(0)
-
-    #plot_custompoints("ay-vy*yawrate", [[d["true_vy"]*d["true_yawrate"], 0] for d in data], ["calc", "ay"])
-    #exit(0)
     #plot state-true-pred graphs for all variables
-    plot_timepoints("xs"+filename, ["true_X", "state_X", "gps_pred_X"])
-    plot_timepoints("ys"+filename, ["true_Y", "state_Y", "gps_pred_Y"])
-    plot_timepoints("yaws"+filename, ["true_Yaw", "state_Yaw", "gps_pred_Yaw"])
-    plot_timepoints("vxs"+filename, ["true_vx", "state_vx", "gps_pred_vx", "rh_pred_vx"])
-    plot_timepoints("vys"+filename, ["true_vy", "state_vy"])
-    plot_timepoints("yawrates"+filename, ["true_yawrate", "state_yawrate", "gps_pred_yawrate", "imu_pred_yawrate", "rh_pred_yawrate", "u_pred_yawrate"])
-    plot_timepoints("axs"+filename, ["true_ax", "state_ax", "imu_pred_ax", "u_pred_ax"])
-    plot_timepoints("ays"+filename, ["true_ay", "state_ay", "imu_pred_ay"])
-    plot_timepoints("srls"+filename, ["true_srl", "state_srl", "rh_pred_srl"])
-    plot_timepoints("srrs"+filename, ["true_srr", "state_srr", "rh_pred_srr"])
+    plot_timepoints("xs_"+filename, ["true_X", "state_X", "gps_pred_X"])
+    plot_timepoints("ys_"+filename, ["true_Y", "state_Y", "gps_pred_Y"])
+    plot_timepoints("yaws_"+filename, ["true_Yaw", "state_Yaw", "gps_pred_Yaw"])
+    plot_timepoints("vxs_"+filename, ["true_vx", "state_vx", "gps_pred_vx", "rh_pred_vx"])
+    plot_timepoints("vys_"+filename, ["true_vy", "state_vy"])
+    plot_timepoints("yawrates_"+filename, ["true_yawrate", "state_yawrate", "gps_pred_yawrate", "imu_pred_yawrate", "rh_pred_yawrate", "u_pred_yawrate"])
+    plot_timepoints("axs_"+filename, ["true_ax", "state_ax", "imu_pred_ax", "u_pred_ax"])
+    plot_timepoints("ays_"+filename, ["true_ay", "state_ay", "imu_pred_ay"])
+    plot_timepoints("srls_"+filename, ["true_srl", "state_srl", "rh_pred_srl"])
+    plot_timepoints("srrs_"+filename, ["true_srr", "state_srr", "rh_pred_srr"])
 
+
+if __name__ == "__main__":
+    run()

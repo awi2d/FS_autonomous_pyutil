@@ -384,31 +384,6 @@ def read_basler_camera():
     newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w,h), 1, (w,h))
 
 
-def test_myPnP():
-    image_size = (1200, 1920)
-    indexe = [(i, j) for i in range(7) for j in range(7) if i > j]
-    # constant. object coordinate space (0, 0, 0) lies in center of baseplate of cone.
-    cone_height = 0.325  # [m]
-    cone_diamter_top = 0.046  # (3/21)*np.sqrt(2*0.228**2)  # [m]
-    cone_diameter_bottom = 0.169  # (11/21)*np.sqrt(2*0.228**2)  # [m]
-    cone_diamter_dif = cone_diameter_bottom-cone_diamter_top
-    objectPoints = np.array([[0, cone_height, 0], [cone_diamter_top+(1/3)*cone_diamter_dif, (2/3)*cone_height, 0], [cone_diamter_top+(2/3)*cone_diamter_dif, (1/3)*cone_height, 0], [cone_diamter_top+(3/3)*cone_diamter_dif, (0/3)*cone_height, 0], [-cone_diamter_top-(1/3)*cone_diamter_dif, (2/3)*cone_height, 0], [-cone_diamter_top-(2/3)*cone_diamter_dif, (1/3)*cone_height, 0], [-cone_diamter_top-(3/3)*cone_diamter_dif, (0/3)*cone_height, 0]])  # [[left, height, deepth]]
-    #camera constants
-    focal_length = 3919  # dxdx ?= distance_to_object*size_of_object/pixelsize_of_image_of_object
-    focal_width = 90  # size of sichtfeld in degree
-    camera_rotation = 0  # rotation of camera front from car front
-
-    # in this case: keypoints, translated into full image
-    imagePoints = np.array([(t[0]*1200, t[0]*1920) for t in [(0.244140625, 0.46484375), (0.228515625, 0.51953125), (0.2255859375, 0.568359375), (0.21875, 0.6142578125), (0.2587890625, 0.5185546875), (0.2646484375, 0.5625), (0.271484375, 0.609375)]])  # detected by keypoint_regression on image patch showing cone.
-
-    #distance camera-object ~ distance between two object points
-    dist = focal_length*np.average([eukl_dist(objectPoints[i], objectPoints[j])/eukl_dist(imagePoints[i], imagePoints[j]) for (i, j) in indexe])
-    # angle between front direction of car and direction from car center to cone:
-    alpha = np.average([t[1] for t in imagePoints])*focal_width/image_size[1]+camera_rotation
-
-    print("dist, angle = ", dist, alpha)
-
-
 def test_solvePnPRansac():
     #https://docs.opencv.org/2.4/modules/calib3d/doc/camera_calibration_and_3d_reconstruction.html#solvepnpransac
     nkeypoitns = 7

@@ -341,7 +341,7 @@ def main():
     #model.summary()
 
     #TODO train with more & better images
-    train(model, images, keypts)
+    train(model, images, keypts)  # currently best val_loss: 0.35456
 
     fig = plt.figure(figsize=(10, 10))
 
@@ -356,11 +356,13 @@ def main():
     onnx_model, _ = tf2onnx.convert.from_keras(model, input_signature, opset=13)
     onnx.save_model(onnx_model, save_dir+"keypoint_regression_best.onnx")
 
-if __name__=="__main__":
-    lines = []
-    with open("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cone_annotations.csv", 'r') as f:
-        lines = f.readlines()
-    lines = [line.replace("\\", "/").replace("C:/Users/Idefix/PycharmProjects/datasets/keypoints/", "/") for line in lines]  # C:\Users\Idefix\PycharmProjects\datasets\keypoints\images\cone_1000.jpg
-    with open("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cone_annotations.csv", 'w') as f:
-        f.writelines(lines)
+
+if __name__ == "__main__":
+    #lines = []
+    #with open("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cone_annotations.csv", 'r') as f:
+    #    lines = f.readlines()
+    #lines = [line.replace("\\", "/").replace("C:/Users/Idefix/PycharmProjects/datasets/keypoints/", "/") for line in lines]  # C:\Users\Idefix\PycharmProjects\datasets\keypoints\images\cone_1000.jpg
+    #with open("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cone_annotations.csv", 'w') as f:
+    #    f.writelines(lines)
+    #print("changed cone_annotations.csv to correct format")
     main()

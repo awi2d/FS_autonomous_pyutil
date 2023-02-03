@@ -121,6 +121,31 @@ def cutout_cones_fscoco(fscoco_file_dir:os.path, output_dir:os.path):
     print(f"average bounding box size: ({np.sum([s[0] for s in sizes])/len(sizes)}, {np.sum([s[1] for s in sizes])/len(sizes)})")
 
 
+def cutout_cones_yoloformat(images_dir: os.path, labels_dir: os.path, output_dir: os.path):
+    sizes = []
+    for label_file in [f for f in os.listdir(labels_dir)]:
+        if len(str(label_file).split(".")) == 3:
+            continue
+        img_name = label_file.replace(".txt", ".jpg")
+        print("read file ", images_dir/img_name)
+        img = cv2.imread(str(images_dir/img_name))
+        h, w, _ = img.shape
+        with open(labels_dir/label_file) as f:
+            i = 0
+            for line in f.readlines():
+                #0 0.4513020833333333 0.51625 0.07135416666666666 0.15916666666666668
+                classlabel, cx, cy, sx, sy = line.split(" ")
+                classlabel, cx, cy, sx, sy = int(classlabel), float(cx), float(cy), float(sx), float(sy)
+                sizes.append((sx, sy))
+                #cutout from img
+                print(f"classlabel {classlabel}, cx {cx}, cy {cy}, sx {sx}, sy {sy}")
+                cone_img = img[int(h*(cy-0.5*sy)):int(h*(cy+0.5*sy)), int(w*(cx-0.5*sx)):int(w*(cx+0.5*sx))]
+                #save
+                cv2.imwrite(str(output_dir/f"camL3_{img_name}_cone_{i}.jpg"), cone_img)
+                i += 1
+    print(np.average([x for (x, y) in sizes]), np.average([y for (x, y) in sizes]))
+
+
 def cutout_cones_detect(images_dir:os.path, output_dir:os.path, model):
     image_files = [f for f in os.listdir(images_dir) if os.path.isfile(os.path.join(images_dir, f))]
     index = max([int(str(f).replace(".jpg", "").split("_")[-1]) for f in os.listdir(output_dir) if os.path.isfile(os.path.join(output_dir, f))])+1
@@ -136,28 +161,6 @@ def cutout_cones_detect(images_dir:os.path, output_dir:os.path, model):
             img_cone = img_img[bounding_box[1]:bounding_box[3], bounding_box[0]:bounding_box[2]]
             cv2.imwrite(output_dir/f"cone_{index}.jpg", img_cone)
             index += 1
-
-
-def cutout_cones_yoloformat(images_dir: os.path, labels_dir: os.path, output_dir: os.path):
-    for label_file in [f for f in os.listdir(labels_dir) if str(f) == "frame_2032.txt"]:
-        if len(str(label_file).split(".")) == 3:
-            continue
-        img_name = label_file.replace(".txt", ".jpg")
-        print("read file ", images_dir/img_name)
-        img = cv2.imread(str(images_dir/img_name))
-        h, w, _ = img.shape
-        with open(labels_dir/label_file) as f:
-            i = 0
-            for line in f.readlines():
-                #0 0.4513020833333333 0.51625 0.07135416666666666 0.15916666666666668
-                classlabel, cx, cy, sx, sy = line.split(" ")
-                classlabel, cx, cy, sx, sy = int(classlabel), float(cx), float(cy), float(sx), float(sy)
-                #cutout from img
-                print(f"classlabel {classlabel}, cx {cx}, cy {cy}, sx {sx}, sy {sy}")
-                cone_img = img[int(h*(cy-0.5*sy)):int(h*(cy+0.5*sy)), int(w*(cx-0.5*sx)):int(w*(cx+0.5*sx))]
-                #save
-                cv2.imwrite(str(output_dir/f"camL3_{img_name}_cone_{i}.jpg"), cone_img)
-                i += 1
 
 
 def draw_cone_keypoints(img_file: os.path, label_file: os.path):
@@ -186,14 +189,14 @@ def draw_numberd_bounding_boxes(img_file: os.path, label_file: os.path, keypoint
     keypoints = {}
     if keypoint_file is not None:
         with open(keypoint_file) as f:
-            for line in f.readlines():
-                imgnr_conenr = line.split(",")[0].split("\\")[-1]  # camL3_frame_1282.jpg_cone_0.jpg
-                #TODO will break if other cam than camL3 is used
+            for line in f.readlines()[1:]:
+                imgnr_conenr = line.split(",")[0].split("/")[-1]  # line = /cones/camL3_frame_1572.jpg_cone_1.jpg,float#float,...
                 if not imgnr_conenr.startswith("cone_"):
                     tmp = imgnr_conenr.split("_")
+                    cam = tmp[0]
                     frnr = int(tmp[2].replace(".jpg", ""))
                     conenr = int(tmp[4].replace(".jpg", ""))
-                    keypoints[(frnr, conenr)] = [(float(kp.split("#")[0]), float(kp.split("#")[1])) for kp in line.split(",")[1:]]
+                    keypoints[(cam, frnr, conenr)] = [(float(kp.split("#")[0]), float(kp.split("#")[1])) for kp in line.split(",")[1:]]
 
     framenumber = int(str(img_file).split("\\")[-1].split("_")[-1].replace(".jpg", ""))
     with open(label_file) as f:
@@ -206,17 +209,26 @@ def draw_numberd_bounding_boxes(img_file: os.path, label_file: os.path, keypoint
             cv2.rectangle(img, (int(pos_width-0.5*width), int(pos_hight-0.5*height)), (int(pos_width+0.5*width), int(pos_hight+0.5*height)), color, 3)
             if (framenumber, i) in keypoints.keys():
                 print(f"add keypoints to cone {i}")
-                for keypoint in keypoints[(framenumber, i)]:
+                for keypoint in keypoints[("camL3", framenumber, i)]:
                     cv2.circle(img, (int(pos_width-0.5*width+width*keypoint[0]), int(pos_hight-0.5*height+height*keypoint[1])), 5, color, -1)
             cv2.putText(img, f"{i}cone_{i})", (int(pos_width), int(pos_hight)), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 1, 2)
     #cv2.rectangle(img, (ecke1.wpos, ecke1.hpos), (ecke2.wpos, ecke2.hpos), (255, 0, 255), 3)  # width = ecke2.wpos-ecke1.wpos
-    cv2.imshow(str(img_file), img)
+    cv2.imshow(str(img_file), cv2.resize(img, (1800, 1000)))
     cv2.waitKey(0)
 
 
+def sort_bblabels_by_cls():
+    labels_dir=pathlib.Path(labels_dir="C:/Users/Idefix/PycharmProjects/OpenLabeling/main/output/YOLO_darknet/")
+    for label_file in [f for f in os.listdir(labels_dir)]:
+        if len(str(label_file).split(".")) == 3:
+            continue
+
 if __name__ == "__main__":
     datasets_path = pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/")
-    draw_numberd_bounding_boxes(img_file=datasets_path/pathlib.Path("testrun_2022_12_17/cam_footage/left_cam_14_46_00/frame_2032.jpg"), label_file=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/labels/frame_2032.txt"), keypoint_file=datasets_path/pathlib.Path("keypoints/cone_annotations.csv"))
+    cutout_cones_yoloformat(images_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/OpenLabeling/main/input"), labels_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/OpenLabeling/main/output/YOLO_darknet/"), output_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cones/"))
+    #for frnr in range(2360, 4021, 10):
+    #i = 1307
+    #draw_numberd_bounding_boxes(img_file=datasets_path/pathlib.Path(f"testrun_2022_12_17/cam_footage/left_cam_14_46_00/camL3_frame_{i}.jpg"), label_file=pathlib.Path(f"C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/labels/camL3_frame_{i}.txt"), keypoint_file=datasets_path/pathlib.Path("keypoints/cone_annotations.csv"))
     #draw_cone_keypoints(img_file=datasets_path/pathlib.Path("keypoints/cones/camL3_frame_1562.jpg_cone_0.jpg"), label_file=datasets_path/pathlib.Path("keypoints/cone_annotations.csv"))
     #cutout_cones_yoloformat(images_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/images"),
     #                        labels_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/labels"),

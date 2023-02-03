@@ -11,6 +11,7 @@ heading_radiants = float  # https://en.wikipedia.org/wiki/Azimuth
 meter = float
 meter_north = float
 meter_east = float
+meter_pos = (meter_north, meter_east)
 degree_north = float  # in radiants
 lattitude = degree_north
 degree_east = float  # in radiants
@@ -32,19 +33,21 @@ def degree_to_radiants(gps: gps_pos_degree) -> gps_pos_radiant:
     return d2r*gps[0], d2r*gps[1]
 
 
-def carposs_to_heading(gps: [gps_pos_degree]) -> heading_radiants:
+def carposs_to_heading(carposes: [gps_pos_degree]) -> heading_radiants:
     # gps = [Left front wheel gps-position in degree, Right front wheel, Left rear wheel, Right rear wheel]
     # 0: front axis is norht of rear axis
     # 0.5*pi: front axis is east of rear axis
-    return gps_to_azimuth(0.5*np.array(gps[0])+0.5*np.array(gps[1]), 0.5*np.array(gps[2])+0.5*np.array(gps[3]))
+    if all([carposes[0][i]+carposes[1][i] == carposes[2][i]+carposes[3][i] for i in [0, 1]]):
+        warnings.warn(f"gps_util.carposs_to_heading: avg(carposes[0]={carposes[0]}, carposes[1]={carposes[1]}) and avg(carpoeses[2]={carposes[2]}, carpoese[3]={carposes[3]}) = {0.5*np.array(carposes[0])+0.5*np.array(carposes[1])} are identical, heading not defined")
+    return gps_to_azimuth(0.5*np.array(carposes[0])+0.5*np.array(carposes[1]), 0.5*np.array(carposes[2])+0.5*np.array(carposes[3]))
 
 
 def _gps_to_distazimuth(gps: gps_pos_radiant, gps_base: gps_pos_radiant) -> (meter, heading_radiants):
     if any([x < -np.pi or x > np.pi for x in gps]):
-        warnings.warn(f"gps_util.gps_to_distazimuth: gps {gps} should be in radiants, not degree.")
+        warnings.warn(f"gps_util._gps_to_distazimuth: gps {gps} should be in radiants, not degree.")
         gps = degree_to_radiants(gps)
     if any([x < -np.pi or x > np.pi for x in gps_base]):
-        warnings.warn(f"gps_util.gps_to_distazimuth: gps_base {gps_base} should be in radiants, not degree.")
+        warnings.warn(f"gps_util._gps_to_distazimuth: gps_base {gps_base} should be in radiants, not degree.")
         gps_base = degree_to_radiants(gps_base)
 
     u1 = np.arctan((1-f)*np.tan(gps_base[0]))
@@ -73,7 +76,7 @@ def _gps_to_distazimuth(gps: gps_pos_radiant, gps_base: gps_pos_radiant) -> (met
             #print(f"gps_util.gps_to_distazimuth: {i} iterations used")  # always 2, for my use cases
             break
         if i > 10:
-            warnings.warn(f"gps_util.gps_to_distazimuth: dist and azimuth between gps {gps} and gps_base {gps_base} could not be established after {i} iterations. reaturn best guess")
+            warnings.warn(f"gps_util._gps_to_distazimuth: dist and azimuth between gps {gps} and gps_base {gps_base} could not be established after {i} iterations. reaturn best guess")
             break
     u_sqared = cos_alpha_sqrd*(a**2-b**2)/b**2
     A = 1+u_sqared/16384*(4096+u_sqared*(-768+u_sqared*(320-175*u_sqared)))
@@ -89,7 +92,7 @@ def _gps_to_distazimuth(gps: gps_pos_radiant, gps_base: gps_pos_radiant) -> (met
 def gps_to_distazimuth(gps: gps_pos_radiant, gps_base: gps_pos_radiant) -> (meter, heading_radiants):
     if gps[0] == gps_base[0] and gps[1] == gps_base[1]:
         warnings.warn(f"gps_util.gps_to_distazimuth: gps and gps_base {gps} are identical, heading not defined")
-        return 0.0, 0.0  # maybe better to reurn 0, float("nan")
+        return 0.0, float("nan")  # maybe better to return 0, float("nan")
     return _gps_to_distazimuth(gps, gps_base)
 def gps_to_dist(gps: gps_pos_radiant, gps_base: gps_pos_radiant) -> meter:
     if gps[0] == gps_base[0] and gps[1] == gps_base[1]:
@@ -97,7 +100,7 @@ def gps_to_dist(gps: gps_pos_radiant, gps_base: gps_pos_radiant) -> meter:
     return _gps_to_distazimuth(gps, gps_base)[0]
 def gps_to_azimuth(gps: gps_pos_radiant, gps_base: gps_pos_radiant) -> heading_radiants:
     if gps[0] == gps_base[0] and gps[1] == gps_base[1]:
-        warnings.warn(f"gps_util.gps_to_distazimuth: gps and gps_base {gps} are identical, heading not defined")
+        warnings.warn(f"gps_util.gps_to_azimuth: gps and gps_base {gps} are identical, heading not defined")
         return 0.0  # maybe better to reurn float("nan")
     return _gps_to_distazimuth(gps, gps_base)[1]
 
@@ -155,6 +158,8 @@ def distazimuth_to_meter(dh_vector: (meter, heading_radiants)) -> (meter_north, 
 
 
 def gps_to_meter(gps: (lattitude, longitude), gps_base: (lattitude, longitude)) -> (meter_north, meter_east):
+    if gps[0] == gps_base[0] and gps[1] == gps_base[1]:
+        return (0, 0)
     return distazimuth_to_meter(gps_to_distazimuth(gps, gps_base))
 
 
