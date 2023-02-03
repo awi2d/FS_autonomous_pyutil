@@ -1,3 +1,5 @@
+import matplotlib.pyplot as plt
+import numpy as np
 
 def getType(x):
     """
@@ -43,3 +45,53 @@ def getType(x):
     if name in ["KerasTensor", "Tensor", "EagerTensor"]:
         return str(name)+"("+str(x.shape)+":"+str(x.dtype)+")"
     return name
+
+
+seconds = float
+def plot_and_save(name: str, x_in: [seconds], ys: [[float]], save_dir=None, names=None):
+    """
+    plots y (dependent variable) against x. with 5-second average of y, mean an total average of y and saves the plot to save_dir.
+    removes outliers from y and adds name as name of plot and label for y data and label for y-axis
+    """
+    for y in ys:
+        assert len(x_in) == len(y)
+    print(f"plot_and_save(name = {name}, save_dir={save_dir}): ")
+    # if any value in y is more than ?double? the distance to mean than the max of the lower ?90?%, remove them
+    mean = np.median(ys)
+    fig, (axe) = plt.subplots(1)
+    axe.set_title(name)
+    if names is None:
+        names = ["" for _ in range(len(ys))]
+    for (name_suffix, y) in zip(names, ys):
+        x = list(x_in)
+        dist = [abs(ty - mean) for ty in y]
+        dist.sort()
+        dist = 2 * dist[int(0.9 * len(dist))]  # keep all
+        print("mean = ", mean, ", dist = ", dist)
+        if dist != 0:
+            old_length = len(x)
+            tmp = [(tx, ty) for (tx, ty) in zip(x, y) if abs(ty - mean) < dist]
+            print("removing outliers changed number of data points from ", old_length, " to ", len(tmp), "(",
+                  100 * len(tmp) / old_length, "% of original)")
+            x = [tx for (tx, ty) in tmp]
+            y = [ty for (tx, ty) in tmp]
+            del tmp
+        # plot unfiltered data
+        axe.plot(x, y, label=name+" "+name_suffix)
+        s = 5
+        n = int(s * len(x) / max(x))  # number of timestamps/length in seconds = number of timestamps per seconds, assuming timestamps are evenly spaced.
+        # doing average over {s} seconds checking for unevenly spaced timestamps was to time-consuimg to run on this pc.
+        padded_y = np.array([y[0]] * (n // 2) + list(y) + [y[-1]] * (n - n // 2 - 1))
+        y_avg = np.convolve(padded_y, np.ones(n) / n, mode='valid')
+        axe.plot(x, y_avg, "--", color="green", linewidth=0.5, label="average " + str(s) + "s "+name_suffix)
+        # plot average
+        axe.plot(x, [np.average(y)] * len(y), "-.", color="black", linewidth=0.5, label="total average "+name_suffix)
+        axe.plot(x, [mean] * len(y), "--", color="black", linewidth=0.5, label="mean "+name_suffix)
+
+    axe.set_xlabel("time in seconds")
+    axe.set_ylabel(name)
+    axe.legend()
+    axe.grid()
+    if save_dir is None:
+        save_dir = name
+    fig.savefig(save_dir)
