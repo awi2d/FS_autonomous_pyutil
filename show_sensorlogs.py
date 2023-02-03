@@ -67,10 +67,29 @@ bearing_radiant = float  # in range(-pi, pi) 0 = south, -pi/2 = east, pi/2 = wes
 cone_bounding_box = (int, normalised_px_w, normalised_px_h, normalised_px_w, normalised_px_h)  # classid (0:blue, 1:yellow), center of bounding box, size of bounding box
 cone_keypoitns = [(normalised_px_w, normalised_px_h)]  # always length 7
 poii_id = int  # id of cones and landmarks, consistent between cam and drone footage. see point_of_interest_numbers.jpg
+som_time_seconds = float  # seconds since start of moving.
+drone_frnr = int
+camL_frnr = int
 #</dataTypes>
 
 
 #<utility methods>
+drone_som_frame = {0:2075, 3:2360}
+camL_som_frame = {0:2610, 3:1281}
+camR_som_frame = {0:2508, 3:1225}
+ssd_som_seconds = {0:54, 3:118}
+def drone2t(drone_frnr: drone_frnr, runid=3) -> som_time_seconds:
+    return (drone_frnr - drone_som_frame[runid]) / 25
+def t2drone(t: som_time_seconds, runid=3) -> drone_frnr:
+    return int(t*25+drone_som_frame[runid])
+def camL2t(camL_frnr: camL_frnr, runid=3) -> som_time_seconds:
+    return (camL_frnr-camL_som_frame[runid])/20
+def t2camL(t: som_time_seconds, runid=3) -> camL_frnr:
+    return t*20+camL_som_frame[runid]
+def ssdt2t(ssdt: seconds, runid=3) -> som_time_seconds:
+    return ssdt-ssd_som_seconds[runid]
+def t2ssdt(t: som_time_seconds, runid=3) -> seconds:
+    return t+ssd_som_seconds[runid]
 def abs_value(l):
     return np.sqrt(np.sum([t**2 for t in l]))
 
@@ -555,7 +574,12 @@ def visualise_data(data: SensorDataDict) -> plot:
             print("ERROR: ", k, " is true in ranges", ranges)
     # BMS_SOC_UsbFlRec StateOfCharge of HV battary
     # Converter_L_N_actual_UsbFlRec is rotations/sekonds of Left back wheel
-
+    # 16bit_int.MAX_VALUE = 32767
+    U_I_converter_max = 42.426
+    motorkonstante = 0.83
+    # true_Torque = Converter_L_Torque_Out_UsbFlRec*U_I_converter_max/(16bit_int.MAX_VALUE*np.sqrt(2))*motorkonstante
+    #data["Converter_L_Torque_Out_UsbFlRec"] = np.array(data["Converter_L_Torque_Out_UsbFlRec"])*U_I_converter_max*motorkonstante/(32767*np.sqrt(2))
+    #data["Converter_L_Torque_Out_UsbFlRec"] = np.array(data["Converter_L_Torque_Out_UsbFlRec"]) * U_I_converter_max * motorkonstante / (32767 * np.sqrt(2))
     for i, k in enumerate(relevant_keys):
         if k in cam_keys:
             print("unreachable code was reached")
@@ -693,9 +717,9 @@ def get_car_moves_starttime_from_sensors(my_dicts: SensorDataDict):
                     f"\taccording to {n} car is moving from {st + datetime.timedelta(seconds=t_start)} to {st + datetime.timedelta(seconds=t_end)} (length={t_end - t_start})")
 
 
-def averegae_diff(data: SensorDataDict, k0, k1, nonzero_treshhold=(1, 1), t0=0.0001):
-    k0_name = str(k0).replace("_UsbFlRec", "").replace("Converter_", "").replace("_actual", "")
-    k1_name = str(k1).replace("_UsbFlRec", "").replace("Converter_", "").replace("_actual", "")
+def averegae_diff(data: SensorDataDict, k0, k1, nonzero_treshhold=(1, 1), quotents_are_same=0.0001):
+    k0_name = str(k0).replace("_UsbFlRec", "").replace("Converter_", "").replace("_actual", "").replace("_Actual", "").replace("_Filtered", "")
+    k1_name = str(k1).replace("_UsbFlRec", "").replace("Converter_", "").replace("_actual", "").replace("_Actual", "").replace("_Filtered", "")
     y0 = data[k0]
     y1 = data[k1]
     x0 = data[k0 + x_ending]
@@ -732,6 +756,7 @@ def averegae_diff(data: SensorDataDict, k0, k1, nonzero_treshhold=(1, 1), t0=0.0
     k01 = None
     if len(tmp) > 0:
         k01 = np.average(tmp)
+        print(f"avg({k0_name}/{k1_name}) = {k01}")
     else:
         print(f"no valid elements in {k0_name}/{k1_name}.")
     # k1/k0
@@ -739,12 +764,13 @@ def averegae_diff(data: SensorDataDict, k0, k1, nonzero_treshhold=(1, 1), t0=0.0
     k10 = None
     if len(tmp) > 0:
         k10 = np.average(tmp)
+        print(f"avg({k1_name}/{k0_name}) = {k10}")
     else:
         print(f"no valid elements in {k1_name}/{k0_name}.")
     # print(f"averegae_diff {k0}/{k1}: = {k01}\n{k1}/{k0} = {k10}")
     # fin
     if k01 is not None and k10 is not None:
-        while abs(k01 - 1 / k10) > t0 or abs(k10 - 1 / k01) > t0:
+        while abs(k01 - 1 / k10) > quotents_are_same or abs(k10 - 1 / k01) > quotents_are_same:
             k01, k10 = k01 * 0.5 + 0.5 / k10, k10 * 0.5 + 0.5 / k01
         print(f"averegae_diff: \n# {k0_name} / {k1_name} = {k01}\n# {k1_name} / {k0_name} = {k10}")
 
@@ -1785,8 +1811,38 @@ def test_Slam():
     print(f"nonSlam5 & {tot_dist/truepositives} & {truepositives} & {falsenegatives} & {falsepositives} & ? \\\\")
 
 
+
 def main():
-    test_Slam()
+    sdd = read_csv("merged_rundata_csv/alldata_2022_12_17-14_43_59_id3.csv")
+    poi_true_gps_positions_radiants, carpos = true_pos_from_droneimg_pxpos()
+    carposkeys = list(carpos.keys())
+    carposkeys.sort()
+    true_absv_time = [0 for _ in range(len(carposkeys))]
+    true_absv_value = [0 for _ in range(len(carposkeys))]
+    def carposes2carpos(cps):
+        return 0.25*np.array(cps[0])+0.25*np.array(cps[1])+0.25*np.array(cps[2])+0.25*np.array(cps[3])
+    for i in range(len(carposkeys)-1):
+        if carposkeys[i+1] > carposkeys[i]:
+            t0 = drone2t(carposkeys[i])
+            t1 = drone2t(carposkeys[i+1])
+            true_absv_time[i] = 0.5*t0+0.5*t1
+            true_absv_value[i] = gps_util.gps_to_dist(carposes2carpos(carpos[carposkeys[i]]), carposes2carpos(carpos[carposkeys[i+1]]))/(t1-t0)
+        else:
+            print("shouldnt be")
+    time, v_droneview_value, v_gps_value = timesinc(true_absv_time, true_absv_value, [ssdt2t(t) for t in sdd["GNSS_speed_over_ground_UsbFlRec"+x_ending]], sdd["GNSS_speed_over_ground_UsbFlRec"])
+    plot_and_save("v from gps and drone", x_in=time, ys=[v_droneview_value, v_gps_value], names=["droneview", "gps"])
+
+
+    #visualise_data(sdd)
+    sdd["true_v"] = np.array(true_absv_value)
+    sdd["true_v"+x_ending] = np.array(true_absv_time)
+    print("sdd[Converter_L_RPM_Actual_Filtered_UsbFlRec] =", sdd["Converter_L_RPM_Actual_Filtered_UsbFlRec"])
+    plot_and_save("RPM_L", sdd["Converter_L_RPM_Actual_Filtered_UsbFlRec"+x_ending], [sdd["Converter_L_RPM_Actual_Filtered_UsbFlRec"]])
+    plot_and_save("RPM_R", sdd["Converter_R_RPM_Actual_Filtered_UsbFlRec" + x_ending], [sdd["Converter_R_RPM_Actual_Filtered_UsbFlRec"]])
+    averegae_diff(sdd, "Converter_L_RPM_Actual_Filtered_UsbFlRec", "true_v")
+    averegae_diff(sdd, "Converter_R_RPM_Actual_Filtered_UsbFlRec", "true_v")
+    averegae_diff(sdd, "Converter_L_RPM_Actual_Filtered_UsbFlRec", "GNSS_speed_over_ground_UsbFlRec")
+    averegae_diff(sdd, "Converter_R_RPM_Actual_Filtered_UsbFlRec", "GNSS_speed_over_ground_UsbFlRec")
 
 
 if __name__ == "__main__":
@@ -1842,3 +1898,8 @@ def all_functions():
     test_Slam()
     main()
 
+# 16bit_int.MAX_VALUE = 32767
+# U_I_converter_max = 42.46
+# motorkonstante = 0.83
+# Trq = Converter_L_Torque_Out_UsbFlRec*U_I_converter_max/(16bit_int.MAX_VALUE*np.sqrt(2))*motorkonstante
+# RPM = Converter_L_RPM_Actual_Filtered_UsbFlRec*6000/32767

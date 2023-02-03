@@ -77,7 +77,7 @@ def plot_and_save(name: str, x_in: [seconds], ys: [[float]], save_dir=None, name
             y = [ty for (tx, ty) in tmp]
             del tmp
         # plot unfiltered data
-        axe.plot(x, y, label=name+" "+name_suffix)
+        axe.plot(x, y, label=name_suffix)
         s = 5
         n = int(s * len(x) / max(x))  # number of timestamps/length in seconds = number of timestamps per seconds, assuming timestamps are evenly spaced.
         # doing average over {s} seconds checking for unevenly spaced timestamps was to time-consuimg to run on this pc.
