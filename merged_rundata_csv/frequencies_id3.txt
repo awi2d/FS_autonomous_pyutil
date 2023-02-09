@@ -1,0 +1,43 @@
+BMS_SOC	: avg = 140.79480838775635, median = 140.79480838775635, mean = 140.79480838775635
+BMS_SOC	: len = 1, min = 140.79480838775635, max = 140.79480838775635
+number of adjacend times that are equal = 202524
+L_N	: avg = 0.11686402559280396, median = 0.03800058364868164, mean = 0.11686402559280396
+L_N	: len = 1596, min = 0.037201881408691406, max = 118.15271425247192
+number of adjacend times that are equal = 202607
+R_N	: avg = 0.125460019745105, median = 0.03800058364868164, mean = 0.125460019745105
+R_N	: len = 1513, min = 0.03718161582946777, max = 118.15272450447083
+number of adjacend times that are equal = 204120
+L_RPM_Actual_Filtered	: is constant
+number of adjacend times that are equal = 204120
+R_RPM_Actual_Filtered	: is constant
+number of adjacend times that are equal = 202956
+L_Torque_Out	: avg = 0.15931071150456375, median = 0.03800082206726074, mean = 0.15931071150456375
+L_Torque_Out	: len = 1165, min = 0.03786730766296387, max = 118.10872316360474
+number of adjacend times that are equal = 202947
+R_Torque_Out	: avg = 0.15822419343803645, median = 0.03800082206726074, mean = 0.15822419343803645
+R_Torque_Out	: len = 1173, min = 0.03796982765197754, max = 113.70072078704834
+number of adjacend times that are equal = 168796
+ECU_ACC_X	: avg = 0.005778367583363719, median = 0.005007266998291016, mean = 0.005778367583363719
+ECU_ACC_X	: len = 35324, min = 0.0039730072021484375, max = 0.035010576248168945
+number of adjacend times that are equal = 168109
+ECU_ACC_Y	: avg = 0.005668130752124073, median = 0.005007266998291016, mean = 0.005668130752124073
+ECU_ACC_Y	: len = 36011, min = 0.0039730072021484375, max = 0.03500032424926758
+number of adjacend times that are equal = 167876
+ECU_ACC_Z	: avg = 0.0056316923218943825, median = 0.005007266998291016, mean = 0.0056316923218943825
+ECU_ACC_Z	: len = 36244, min = 0.0039730072021484375, max = 0.030003070831298828
+number of adjacend times that are equal = 204053
+GNSS_heading	: avg = 2.7974631501667537, median = 1.0000076293945312, mean = 2.7974631501667537
+GNSS_heading	: len = 67, min = 0.9980006217956543, max = 121.43174648284912
+number of adjacend times that are equal = 204016
+GNSS_latitude	: avg = 1.946452872111247, median = 1.0000076293945312, mean = 1.946452872111247
+GNSS_latitude	: len = 104, min = 0.4349849224090576, max = 19.999232292175293
+number of adjacend times that are equal = 203946
+GNSS_longitude	: avg = 1.169144171407853, median = 1.0000076293945312, mean = 1.169144171407853
+GNSS_longitude	: len = 174, min = 0.434995174407959, max = 4.000010251998901
+number of adjacend times that are equal = 203918
+GNSS_speed_over_ground	: avg = 1.0070895003800344, median = 1.0000026226043701, mean = 1.0070895003800344
+GNSS_speed_over_ground	: len = 202, min = 0.43599867820739746, max = 2.0000357627868652
+number of adjacend times that are equal = 204120
+SWS_angle	: is constant
+
+Process finished with exit code 0

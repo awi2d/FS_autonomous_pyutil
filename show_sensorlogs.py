@@ -8,7 +8,7 @@ import datetime
 import matplotlib.pyplot as plt
 import scipy.optimize
 
-from util import getType, plot_and_save
+from util import getType, plot_and_save, smothing
 import gps_util
 
 #<constants>
@@ -26,14 +26,12 @@ cam_keys = ["cam_left", "cam_right", "cam_drone"]
 startTimestamp_key = "StartTimestamp"
 length_key = "Length"
 vis_out_path = pathlib.Path("vis_out/")
-# mat_files_dir = [pathlib.Path(p) for p in ["testrun_0/", "testrun_1/", "testrun_2/", "testrun_3/", "testrun_6/", "testrun_7/", "testrun_8/", "testrun_unknown/"]]  # all dirs that contain .mat files
-mat_files_dir = [pathlib.Path(p) for p in ["testrun_13_30/", "testrun_14_21/",
-                                           "testrun_14_41/"]]  # only dirs that contain .mat files for runs on the 2022-12-17 (yyyy-mm-dd)
+mat_files_dir = [pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/testrun_2022_12_17/sensordata/"+p) for p in ["testrun_13_30/", "testrun_14_21/", "testrun_14_41/"]]  # only dirs that contain .mat files for runs on the 2022-12-17 (yyyy-mm-dd)
 csv_files_dir = pathlib.Path("merged_rundata_csv/")
 # csv_files = [pathlib.Path(f) for f in os.listdir(csv_files_dir) if str(f).endswith(".csv")]
 csv_files = [pathlib.Path(f) for f in os.listdir(csv_files_dir) if str(f).endswith(".csv") and str(f).split("-")[
     0] == "alldata_2022_12_17"]  # only return csv files that were recorded at the 2022-12-17 (yyyy-mm-dd)
-cam_footage_dir = pathlib.Path("cam_footage")
+cam_footage_dir = pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/testrun_2022_12_17/cam_footage/")
 cam_sync_files = [cam_footage_dir / pathlib.Path(f) for f in
                   ["sync_info_camL0.txt", "sync_info_camR0.txt", "sync_info_camL3.txt", "sync_info_camR3.txt",
                    "sync_info_drone0.txt", "sync_info_drone3.txt"]]  # , "sync_info_drone1.txt"
@@ -50,6 +48,10 @@ def assert_SensorDataDict_is_valid(sdd: SensorDataDict) -> None:
     if any([k in sdd.keys() for k in cam_keys]):
         keys += cam_keys
     keysp = keys + [k + x_ending for k in keys] + [startTimestamp_key, length_key]
+    for k in [k for k in sdd.keys() if str(k).endswith(x_ending)]:
+        if not all([sdd[k][i+1] >= sdd[k][i] for i in range(len(sdd[k])-1)]):  # time is ascending.
+            print(f"time of {k} is not ascending")
+            assert False
     if not set(keysp) == set([str(k) for k in sdd.keys()]):
         print("sdd.keys() = ", sdd.keys())
         print("\n keys+ = ", keysp)
@@ -74,6 +76,10 @@ camL_frnr = int
 
 
 #<utility methods>
+def k_to_name(k) -> str:
+    return str(k).replace("Converter_", "").replace("_UsbFlRec", "").replace("_actual", "").replace("_Actual", "").replace("_Filtered", "")
+
+
 drone_som_frame = {0:2075, 3:2360}
 camL_som_frame = {0:2610, 3:1281}
 camR_som_frame = {0:2508, 3:1225}
@@ -85,7 +91,7 @@ def t2drone(t: som_time_seconds, runid=3) -> drone_frnr:
 def camL2t(camL_frnr: camL_frnr, runid=3) -> som_time_seconds:
     return (camL_frnr-camL_som_frame[runid])/20
 def t2camL(t: som_time_seconds, runid=3) -> camL_frnr:
-    return t*20+camL_som_frame[runid]
+    return int(t*20+camL_som_frame[runid])
 def ssdt2t(ssdt: seconds, runid=3) -> som_time_seconds:
     return ssdt-ssd_som_seconds[runid]
 def t2ssdt(t: som_time_seconds, runid=3) -> seconds:
@@ -130,6 +136,29 @@ def get_at_time(x: [seconds], y: [float], t: seconds) -> (float, int):
             return (w1*y[i-1]+w0*y[i])/(w0+w1), i-1 if w0 < w1 else i
 
 
+def onsided_timesinc(in_time, in_value, target_time) -> ([seconds], [float]):
+    # return the same as [get_at_time(value_time, value_value, t) for t in target_time] would, but is computationally faster.
+    assert len(in_time) == len(in_value)
+    in_index = 0
+    synced_in_value = []
+    for t in target_time:
+        while in_index + 1 < len(in_time) and in_time[in_index + 1] < t:
+            in_index += 1
+        # in_time[in_index] < t < in_time[in_index+1]
+        if in_index + 1 >= len(in_time):
+            in_index = len(in_time) - 2
+            synced_in_value.append(in_value[-1])
+        elif in_index == 0:
+            synced_in_value.append(in_value[0])
+        else:
+            # append weighted average
+            w0 = abs(in_time[in_index] - t)
+            w1 = abs(in_time[in_index + 1] - t)
+            synced_in_value.append((w0 * in_value[in_index] + w1 * in_value[in_index + 1]) / (w0 + w1))
+    synced_in_value = np.array(synced_in_value)
+    assert len(target_time) == len(synced_in_value)
+    return synced_in_value
+
 def timesinc(a_x: [seconds], a_y: [float], b_x: [seconds], b_y: [float]) -> ([seconds], [float], [float]):
     # return timesteps, a_y, b_y, so that (timesteps, a_y) and timesteps, b_y) are valid time-data pairs, and that a_y and b_y are as close to the input a_y and b_y as possible
     timesteps = np.array(sorted(list(set(a_x).union(set(b_x)))))
@@ -169,17 +198,17 @@ def timesinc(a_x: [seconds], a_y: [float], b_x: [seconds], b_y: [float]) -> ([se
     return timesteps, sy0, sy1
 
 
-def fit_linpp_and_print(in_x, out_true, name):
+def fit_poly_fun_and_print(in_x, out_true, name, exponents=[-1, 0, 1, 2]):
     # returns fun, parameters, so that fun(in_x, parameters) = out_true
     assert len(in_x) == len(out_true)
     in_x = np.array(in_x)
     out_true = np.array(out_true)
-    fo = np.array([1, 0, 0, 0])
-    #fo = np.array([1, 0])
+    #fo = np.array([1, 0, 0, 0])
+    fo = np.array([(1 if i == 1 else 0) for i in exponents])
 
     def fun(x, t):
-        return t[0]*x + t[1]*x**2 + t[2]/x + t[3]
-        #return t[0]*x + t[1]
+        return np.sum([t[i]*x**v for (i, v) in enumerate(exponents)])
+        #return t[0]*x + t[1]*x**2 + t[2]/x + t[3]
     def loss(t):
         return np.sum((fun(in_x, t) - out_true) ** 2)
     res = scipy.optimize.minimize(loss, fo)
@@ -187,19 +216,18 @@ def fit_linpp_and_print(in_x, out_true, name):
         #return fun, res.x
         parameters = res.x
     else:
-        print("failed_res = ", res)
+        print(f"fitting {name} failed")
         if res.x is not None:
-            print("warining: fit_linear failed")
             #return fun, res.x
             parameters = res.x
         else:
             raise Exception("could not succesfully fit data from", in_x, "to", out_true)
     est_angle = fun(in_x, parameters)
-    print(f"\n{name}.est_from ", in_x)
+    print(f"{name}.est_from ", in_x)
     print(f"{name}.fun(est_from) = ", est_angle)
     print(f"{name}.out_true  = ", out_true)
     print(f"parameters[{name}] = {parameters}")
-    print(f"diff_{name} = ", np.sqrt(np.sum((est_angle-out_true)**2)))
+    print(f"diff_{name} = {np.sqrt(np.sum((est_angle-out_true)**2))}\n")
     return fun, parameters
 
 
@@ -329,6 +357,7 @@ def read_mat(fname: os.path) -> SensorDataDict:
     my_dict = {}
     description_key = "Description"
     data_dict = mat73.loadmat(fname)
+    assert len(data_dict.keys()) == 1
     data_dict = data_dict[list(data_dict.keys())[0]]  # top-level has only one entry
     # Datetime +Length*minute = Datetaime der nächsten File sollte gelten
     # print("data_dict[Y]", [entry["Raster"] for entry in data_dict["Y"]])
@@ -336,19 +365,19 @@ def read_mat(fname: os.path) -> SensorDataDict:
 
     my_dict[startTimestamp_key] = timestr2datetime(data_dict[description_key]["General"]["DateTime"])
     my_dict[length_key] = float(data_dict[description_key]["Measurement"][length_key])
-    for (x_entry, entry) in zip(data_dict["X"], data_dict["Y"]):
+    for (entry_time, entry_value) in zip(data_dict["X"], data_dict["Y"]):
         # x_entry and entry are np-arrays of seconds_since_starttime, data_of_x_entry["Raster"]_sensor
-        assert x_entry["Raster"] == entry["Raster"]
-        name = entry["Raster"]
+        assert entry_time["Raster"] == entry_value["Raster"]
+        name = entry_value["Raster"]
         if name in relevant_keys:
             name_x = name + x_ending
-            tmp = [(x, d) for (x, d) in zip(x_entry["Data"], entry["Data"]) if not np.isnan(x) and not np.isnan(d)]
-            data = np.array([d for (x, d) in tmp])
-            data_x = np.array([x for (x, d) in tmp])
-            assert all([data_x[i + 1] >= data_x[i] for i in range(len(data_x) - 1)])  # x should be ascending
-            assert len(data) == len(data_x)
-            my_dict[name] = data
-            my_dict[name_x] = data_x
+            tmp = [(time, value) for (time, value) in zip(entry_time["Data"], entry_value["Data"]) if not np.isnan(time) and not np.isnan(value)]
+            data_time = np.array([time for (time, value) in tmp])
+            data_value = np.array([value for (time, value) in tmp])
+            assert all([data_time[i+1] >= data_time[i] for i in range(len(data_time) - 1)])  # x should be ascending
+            assert len(data_value) == len(data_time)
+            my_dict[name] = data_value
+            my_dict[name_x] = data_time
     assert_SensorDataDict_is_valid(my_dict)
     return my_dict
 
@@ -364,8 +393,7 @@ def merge_matsdata(dict_a: SensorDataDict, dict_b: SensorDataDict) -> SensorData
         name_x = name + x_ending
         new_data = np.concatenate(
             (np.reshape(dict_a[name], len(dict_a[name])), np.reshape(dict_b[name], len(dict_b[name]))))
-        new_datax = np.concatenate((np.reshape(dict_a[name_x], len(dict_a[name_x])),
-                                    np.array([t + dict_a[length_key] for t in dict_b[name_x]])))
+        new_datax = np.concatenate((np.reshape(dict_a[name_x], len(dict_a[name_x])), np.array([t + dict_a[length_key] for t in dict_b[name_x]])))
         assert len(new_data) == len(new_datax)
         merged_dict[name] = new_data
         merged_dict[name_x] = new_datax
@@ -379,7 +407,7 @@ def read_mats(path: os.path) -> [SensorDataDict]:
         for p in path:
             files += [p / f for f in os.listdir(p) if str(f).endswith(".mat")]
     else:
-        files = [path + f for f in os.listdir(path) if str(f).endswith(".mat")]
+        files = [path / f for f in os.listdir(path) if str(f).endswith(".mat")]
     files.sort(key=lambda x: str(x))
     mes_dicts = []
     # read all files
@@ -412,9 +440,10 @@ def read_mats(path: os.path) -> [SensorDataDict]:
         merged_dicts.append(tmp)
     # add cam footag (timestamps and framenumbers) to data
     cam_footages = []
+    name = "name"
     for cam_name in cam_sync_files:
         st, fps, n_frames, frames_dir = get_laptoptimes_for_camFrames(cam_name)
-        cam_footages.append({startTimestamp_key: st, "fps": fps, "n_frames": n_frames, "name": frames_dir})
+        cam_footages.append({startTimestamp_key: st, "fps": fps, "n_frames": n_frames, name: frames_dir})
     print("cam_footages: ", [cf["name"] for cf in cam_footages])
     for sensor_data in merged_dicts:
         for cam_footage in cam_footages:
@@ -429,13 +458,14 @@ def read_mats(path: os.path) -> [SensorDataDict]:
                     f"add cam_footage {cam_footage[startTimestamp_key]} with length {int(cf_ls // 60)}:{cf_ls % 60} to sensor_data from {sensor_data[startTimestamp_key]} with length {int(sd_ls // 60)}:{sd_ls % 60}")
                 # start or end of ov cam_footage are inside of sensor_data or sensor_data is inside of cam_footage or cam_footage is inside sensor_data
                 # there exist an overlap of the time where cam_footage was recorded and sensor_data was recorded
-                if str(cam_footage["name"]).split("\\")[-1].startswith("left_cam"):
+                if str(cam_footage[name]).split("\\")[-1].startswith("left_cam"):
                     cam_key = "cam_left"
-                elif str(cam_footage["name"]).split("\\")[-1].startswith("right_cam"):
+                elif str(cam_footage[name]).split("\\")[-1].startswith("right_cam"):
                     cam_key = "cam_right"
+                elif str(cam_footage[name]).split("\\")[-1].startswith("DJI_"):
+                    cam_key = "cam_drone"
                 else:
-                    print("invalid start of onboard camara frames dir: ", cam_footage["name"])
-                    exit(1)
+                    raise Exception(f"invalid start of onboard camara frames dir: {cam_footage[name]}")
                 startframe = 0
                 if cam_footage[startTimestamp_key] < sensor_data[startTimestamp_key]:
                     dts = (sensor_data[startTimestamp_key] - cam_footage[startTimestamp_key]).total_seconds()
@@ -443,11 +473,8 @@ def read_mats(path: os.path) -> [SensorDataDict]:
                 sensor_data[cam_key + x_ending] = [
                     cam_footage[startTimestamp_key] + datetime.timedelta(seconds=frame_nr / cam_footage["fps"]) for
                     frame_nr in range(startframe, cam_footage["n_frames"])]
-                sensor_data[cam_key + x_ending] = [(t - sensor_data[startTimestamp_key]).total_seconds() for t in
-                                                   sensor_data[
-                                                       cam_key + x_ending]]  # transform from datetime to float seconds since sensor_date[startTimestamp_key
-                sensor_data[cam_key] = [cam_footage_dir / str(cam_footage["name"] / f"frame_{i}.jpg") for i in
-                                        range(startframe, cam_footage["n_frames"])]
+                sensor_data[cam_key + x_ending] = [(t - sensor_data[startTimestamp_key]).total_seconds() for t in sensor_data[cam_key+x_ending]]  # transform from datetime to float seconds since sensor_date[startTimestamp_key
+                sensor_data[cam_key] = [str(cam_footage[name] / f"frame_{i}.jpg") for i in range(startframe, cam_footage["n_frames"])]
         for key in cam_keys:
             if not key in sensor_data.keys():
                 sensor_data[key] = np.array([])
@@ -545,7 +572,7 @@ def visualise_data(data: SensorDataDict) -> plot:
     name = data[startTimestamp_key].strftime(time_format_str)
     print("\nvisualise data ", name)
     keys_where_zero_is_nan = ["BMS_SOC_UsbFlRec", "GNSS_latitude_UsbFlRec", "GNSS_longitude_UsbFlRec"]
-    print("empty keys in = ", [key for key in relevant_keys if
+    print("empty keys =", [key for key in relevant_keys if
                                not str(key) == startTimestamp_key and not str(key) == length_key and len(
                                    data[key]) == 0])
     length = min([len(data[key]) for key in relevant_keys])
@@ -573,7 +600,7 @@ def visualise_data(data: SensorDataDict) -> plot:
                 ranges.append((tmp[0], len(data[k])))
             print("ERROR: ", k, " is true in ranges", ranges)
     # BMS_SOC_UsbFlRec StateOfCharge of HV battary
-    # Converter_L_N_actual_UsbFlRec is rotations/sekonds of Left back wheel
+    # Converter_L_N_actual_UsbFlRec is rotations/seconds of Left back wheel
     # 16bit_int.MAX_VALUE = 32767
     U_I_converter_max = 42.426
     motorkonstante = 0.83
@@ -581,6 +608,7 @@ def visualise_data(data: SensorDataDict) -> plot:
     #data["Converter_L_Torque_Out_UsbFlRec"] = np.array(data["Converter_L_Torque_Out_UsbFlRec"])*U_I_converter_max*motorkonstante/(32767*np.sqrt(2))
     #data["Converter_L_Torque_Out_UsbFlRec"] = np.array(data["Converter_L_Torque_Out_UsbFlRec"]) * U_I_converter_max * motorkonstante / (32767 * np.sqrt(2))
     for i, k in enumerate(relevant_keys):
+        print("")
         if k in cam_keys:
             print("unreachable code was reached")
             continue
@@ -696,7 +724,7 @@ def get_car_moves_starttime_from_sensors(my_dicts: SensorDataDict):
 
         for k, f in [("Converter_L_N_actual_UsbFlRec", 886.7828258624362),
                      ("Converter_R_N_actual_UsbFlRec", 153.78931167554344), ("GNSS_speed_over_ground_UsbFlRec", 1)]:
-            n = str(k).replace("_UsbFlRec", "").replace("Converter_", "").replace("_actual", "")
+            k_name = k_to_name(k)
             # print(f"\n\tmoving time using {n}")
             # print(f"\tmaxm({n}_x, {n}) = ({max(data[k+x_ending])}, {max([abs(t) for t in data[k]])})")
             # print(f"\tstarted_moving_thresh = {f*car_started_moving_threshhold}, car_stoped_moving_thresh = {f*car_stoped_moving_threshhold}")
@@ -711,15 +739,15 @@ def get_car_moves_starttime_from_sensors(my_dicts: SensorDataDict):
                 if abs(value) < f * car_stoped_moving_threshhold and t_start is not None and not end_was_true:
                     t_end = time
                 end_was_true = abs(value) < f * car_stoped_moving_threshhold
-            print(f"\t{n}: car moves from {t_start} to {t_end}")
+            print(f"\t{k_name}: car moves from {t_start} to {t_end}")
             if t_start is not None and t_end is not None:
                 print(
-                    f"\taccording to {n} car is moving from {st + datetime.timedelta(seconds=t_start)} to {st + datetime.timedelta(seconds=t_end)} (length={t_end - t_start})")
+                    f"\taccording to {k_name} car is moving from {st + datetime.timedelta(seconds=t_start)} to {st + datetime.timedelta(seconds=t_end)} (length={t_end - t_start})")
 
 
 def averegae_diff(data: SensorDataDict, k0, k1, nonzero_treshhold=(1, 1), quotents_are_same=0.0001):
-    k0_name = str(k0).replace("_UsbFlRec", "").replace("Converter_", "").replace("_actual", "").replace("_Actual", "").replace("_Filtered", "")
-    k1_name = str(k1).replace("_UsbFlRec", "").replace("Converter_", "").replace("_actual", "").replace("_Actual", "").replace("_Filtered", "")
+    k0_name = k_to_name(k0)
+    k1_name = k_to_name(k1)
     y0 = data[k0]
     y1 = data[k1]
     x0 = data[k0 + x_ending]
@@ -796,193 +824,12 @@ def true_pos_from_droneimg_pxpos(point_file=None) -> ([gps_util.gps_pos_radiant]
         gps_pos_optimised = [(0.8982182234878937,0.11761677401554493), (0.8982240283230206,0.11761440317336193), (0.8982228170818565,0.11761917319413157), (0.8982243857590018,0.11761646770990754), (0.8982244271621759,0.11761613484277073), (0.8982213844585475,0.11761598941181839), (0.8982213848761311,0.11761599186563093), (0.8982213939332642,0.11761598320634509), (0.8982213904563322,0.11761597398023396), (0.8982207127624222,0.11761734744161406), (0.8982209760115857,0.1176169686056584), (0.8982215439275895,0.11761655930264585), (0.8982223077464857,0.11761626572893127), (0.8982230483868425,0.11761596725188847), (0.8982238096321328,0.11761566637849627), (0.8982245596483993,0.11761548864916314), (0.8982249819730231,0.11761517199604024), (0.8982253368833978,0.11761458077777534), (0.8982255030900722,0.11761382123124949), (0.898225447183784,0.11761301742240739), (0.8982252110144567,0.11761232810533767), (0.8982248519130996,0.1176118462628097), (0.8982243287436013,0.11761159688349265), (0.8982238387564737,0.1176116845319551), (0.898223368869313,0.11761210044032144), (0.8982231223058281,0.11761274062642617), (0.8982230209395806,0.11761343434028235), (0.8982229206983123,0.11761399348142915), (0.898222717627581,0.1176142835697097), (0.8982220622722421,0.11761461084675427), (0.8982212955292291,0.11761490598513104), (0.8982206112901114,0.1176152522660883), (0.8982198769854388,0.11761553425899654), (0.898219185159113,0.11761591243628926), (0.8982185020043061,0.11761621676535045), (0.898218084570002,0.11761640056576247), (0.8982176482977221,0.11761701278046427), (0.8982174345520092,0.11761770589005656), (0.8982174382508502,0.11761859101897006), (0.8982176249481852,0.11761923622323167), (0.8982180536751105,0.11761987791794339), (0.8982185841039327,0.11762012320428758), (0.8982190702389945,0.11762004854004705), (0.8982196929279495,0.11761944804410492), (0.8982199298134613,0.11761885078516811), (0.8982200712609417,0.11761851223896709), (0.8982202860806936,0.11761812295330196), (0.8982203511382697,0.11761685524391803), (0.8982206475933272,0.11761641718416244), (0.8982214282158968,0.1176159161961673), (0.8982222010192281,0.11761561620903986), (0.898222967630039,0.11761530553184169), (0.898223684375342,0.11761502589625013), (0.8982244161379449,0.11761472666226179), (0.8982247022392744,0.11761451990482338), (0.8982249082879257,0.11761415662866992), (0.8982250039797648,0.11761370110567296), (0.8982249651030323,0.11761322820271117), (0.8982248115235022,0.11761281265239247), (0.8982245726066329,0.11761250887310425), (0.8982242811683868,0.11761239019909261), (0.8982239768391174,0.11761244807650233), (0.8982237116270445,0.11761268035194303), (0.8982235273770167,0.11761305898677114), (0.8982234335652678,0.11761351516990351), (0.8982233422254021,0.11761425236867185), (0.8982231750738204,0.1176147088004039), (0.8982228621181694,0.11761495421716618), (0.8982225397447375,0.11761509300978924), (0.8982221228161205,0.1176152556984028), (0.8982213782338375,0.11761555457679386), (0.8982206959150201,0.11761589637706767), (0.8982200096870406,0.117616173004985), (0.8982193118618405,0.1176165583212593), (0.898218576444067,0.11761700026184876), (0.8982182741018131,0.11761714295644894), (0.8982180548910497,0.11761749339765243), (0.8982179222761699,0.11761794225651936), (0.8982179386997172,0.11761844043930811), (0.8982180819073882,0.1176188885780413), (0.8982183270825627,0.11761921019622713), (0.8982186434717904,0.11761933576345569), (0.8982189654237478,0.11761926128737678), (0.8982192809565324,0.11761895895116418), (0.8982194603685004,0.11761853365189182), (0.8982196452487042,0.11761807291030295), (0.8982198979389193,0.11761760291706577), (0.8982201360624948,0.117617227105226)]
         # carpos = {donre3_framenr: [front_left_tire, front_right_tire, rear_left_tire, rear_right_tire]:[gps_util.gps_pos_radiants]
         # maybe have this in a file or something. its 180 lines long.
-        carpos = {3285: [np.array([0.89822273, 0.11761449]), np.array([0.89822279, 0.11761476]), np.array([0.89822249, 0.11761465]), np.array([0.89822259, 0.11761491])],
-                  3286: [np.array([0.89822273, 0.11761446]), np.array([0.8982228 , 0.11761475]), np.array([0.8982225 , 0.11761464]), np.array([0.8982226 , 0.11761489])],
-                  3287: [np.array([0.89822275, 0.11761449]), np.array([0.89822283, 0.11761477]), np.array([0.89822253, 0.11761462]), np.array([0.8982226 , 0.11761488])],
-                  3288: [np.array([0.89822275, 0.11761445]), np.array([0.89822283, 0.11761476]), np.array([0.89822254, 0.11761462]), np.array([0.89822262, 0.1176149 ])],
-                  3289: [np.array([0.89822277, 0.11761446]), np.array([0.89822283, 0.11761474]), np.array([0.89822255, 0.11761461]), np.array([0.89822261, 0.11761485])],
-                  3277: [np.array([0.89822264, 0.11761456]), np.array([0.89822272, 0.11761485]), np.array([0.89822242, 0.11761468]), np.array([0.8982225 , 0.11761495])],
-                  3278: [np.array([0.89822264, 0.11761454]), np.array([0.89822274, 0.11761484]), np.array([0.89822242, 0.11761467]), np.array([0.8982225 , 0.11761493])],
-                  3279: [np.array([0.89822267, 0.11761455]), np.array([0.89822273, 0.11761483]), np.array([0.89822242, 0.11761467]), np.array([0.89822251, 0.11761497])],
-                  3280: [np.array([0.89822267, 0.1176145 ]), np.array([0.89822276, 0.11761483]), np.array([0.89822244, 0.11761465]), np.array([0.89822251, 0.11761493])],
-                  3281: [np.array([0.89822268, 0.11761454]), np.array([0.89822277, 0.11761482]), np.array([0.89822246, 0.11761467]), np.array([0.89822253, 0.11761494])],
-                  4027: [np.array([0.89822047, 0.11761751]), np.array([0.89822033, 0.11761728]), np.array([0.89822063, 0.11761724]), np.array([0.89822051, 0.11761701])],
-                  4028: [np.array([0.89822045, 0.11761754]), np.array([0.89822032, 0.11761735]), np.array([0.89822063, 0.11761724]), np.array([0.89822048, 0.11761707])],
-                  4029: [np.array([0.89822045, 0.11761753]), np.array([0.89822033, 0.11761736]), np.array([0.89822066, 0.11761728]), np.array([0.89822049, 0.11761709])],
-                  4030: [np.array([0.89822047, 0.11761758]), np.array([0.89822033, 0.11761734]), np.array([0.89822066, 0.11761729]), np.array([0.8982205 , 0.11761707])],
-                  4031: [np.array([0.89822043, 0.11761756]), np.array([0.89822031, 0.11761737]), np.array([0.89822062, 0.11761729]), np.array([0.89822048, 0.11761709])],
-                  2360: [np.array([0.89822093, 0.11761688]), np.array([0.89822082, 0.11761666]), np.array([0.89822113, 0.1176167 ]), np.array([0.89822105, 0.11761644])],
-                  2380: [np.array([0.89822089, 0.11761695]), np.array([0.89822079, 0.11761668]), np.array([0.89822111, 0.11761675]), np.array([0.898221  , 0.11761651])],
-                  2390: [np.array([0.89822085, 0.11761698]), np.array([0.89822075, 0.11761671]), np.array([0.89822105, 0.1176168 ]), np.array([0.89822094, 0.11761654])],
-                  2400: [np.array([0.8982208 , 0.11761704]), np.array([0.89822071, 0.11761678]), np.array([0.89822101, 0.11761684]), np.array([0.89822089, 0.11761661])],
-                  2410: [np.array([0.89822073, 0.11761713]), np.array([0.89822063, 0.11761687]), np.array([0.89822092, 0.11761691]), np.array([0.89822083, 0.11761668])],
-                  2420: [np.array([0.89822067, 0.11761721]), np.array([0.89822055, 0.11761697]), np.array([0.89822086, 0.11761701]), np.array([0.89822074, 0.11761677])],
-                  2430: [np.array([0.8982206, 0.1176173]), np.array([0.89822048, 0.11761709]), np.array([0.8982208 , 0.11761707]), np.array([0.89822067, 0.11761685])],
-                  2440: [np.array([0.89822052, 0.11761739]), np.array([0.89822039, 0.11761718]), np.array([0.8982207 , 0.11761716]), np.array([0.89822057, 0.11761691])],
-                  2450: [np.array([0.89822045, 0.11761754]), np.array([0.89822034, 0.11761734]), np.array([0.89822063, 0.11761729]), np.array([0.8982205 , 0.11761706])],
-                  2460: [np.array([0.89822039, 0.11761766]), np.array([0.89822026, 0.11761745]), np.array([0.89822057, 0.11761741]), np.array([0.89822042, 0.11761718])],
-                  2470: [np.array([0.8982203 , 0.11761776]), np.array([0.89822015, 0.11761755]), np.array([0.89822047, 0.11761751]), np.array([0.89822032, 0.11761729])],
-                  2480: [np.array([0.89822024, 0.11761794]), np.array([0.89822011, 0.11761772]), np.array([0.89822042, 0.11761765]), np.array([0.89822025, 0.11761741])],
-                  2490: [np.array([0.89822019, 0.11761804]), np.array([0.89822002, 0.11761783]), np.array([0.89822034, 0.11761777]), np.array([0.89822019, 0.11761756])],
-                  2500: [np.array([0.89822013, 0.11761815]), np.array([0.89821998, 0.11761795]), np.array([0.89822029, 0.11761786]), np.array([0.89822013, 0.11761769])],
-                  2510: [np.array([0.89822007, 0.11761827]), np.array([0.8982199 , 0.11761811]), np.array([0.89822021, 0.11761802]), np.array([0.89822006, 0.11761782])],
-                  2520: [np.array([0.89821998, 0.11761842]), np.array([0.89821984, 0.11761826]), np.array([0.89822015, 0.11761814]), np.array([0.89822   , 0.11761794])],
-                  2530: [np.array([0.89821995, 0.11761858]), np.array([0.89821979, 0.11761841]), np.array([0.89822012, 0.11761825]), np.array([0.89821994, 0.11761811])],
-                  2540: [np.array([0.89821988, 0.11761873]), np.array([0.89821972, 0.11761855]), np.array([0.89822003, 0.11761843]), np.array([0.89821987, 0.11761821])],
-                  2550: [np.array([0.89821979, 0.11761883]), np.array([0.89821965, 0.11761865]), np.array([0.89821996, 0.11761851]), np.array([0.89821979, 0.11761836])],
-                  2560: [np.array([0.89821978, 0.11761897]), np.array([0.89821961, 0.11761879]), np.array([0.8982199 , 0.11761866]), np.array([0.89821974, 0.11761848])],
-                  2570: [np.array([0.89821968, 0.11761911]), np.array([0.89821952, 0.11761893]), np.array([0.89821984, 0.11761881]), np.array([0.89821967, 0.1176186 ])],
-                  2580: [np.array([0.89821964, 0.11761919]), np.array([0.89821949, 0.11761899]), np.array([0.89821979, 0.11761891]), np.array([0.89821963, 0.11761875])],
-                  2590: [np.array([0.89821953, 0.11761933]), np.array([0.89821939, 0.11761912]), np.array([0.8982197 , 0.11761902]), np.array([0.89821956, 0.11761885])],
-                  2600: [np.array([0.89821943, 0.11761945]), np.array([0.89821931, 0.11761926]), np.array([0.89821963, 0.11761918]), np.array([0.89821947, 0.11761897])],
-                  2610: [np.array([0.89821935, 0.11761953]), np.array([0.89821923, 0.11761931]), np.array([0.89821954, 0.1176193 ]), np.array([0.89821939, 0.11761906])],
-                  2620: [np.array([0.89821923, 0.11761966]), np.array([0.89821913, 0.11761945]), np.array([0.89821943, 0.11761944]), np.array([0.89821931, 0.1176192 ])],
-                  2630: [np.array([0.89821912, 0.11761974]), np.array([0.89821903, 0.11761954]), np.array([0.89821934, 0.11761953]), np.array([0.89821923, 0.1176193 ])],
-                  2640: [np.array([0.898219  , 0.11761982]), np.array([0.89821894, 0.11761957]), np.array([0.89821922, 0.11761961]), np.array([0.89821914, 0.11761937])],
-                  2650: [np.array([0.89821892, 0.11761987]), np.array([0.89821885, 0.11761958]), np.array([0.89821913, 0.11761973]), np.array([0.89821907, 0.11761946])],
-                  2660: [np.array([0.89821881, 0.11761993]), np.array([0.89821875, 0.11761964]), np.array([0.89821901, 0.11761984]), np.array([0.89821899, 0.11761953])],
-                  2670: [np.array([0.89821865, 0.11761988]), np.array([0.89821859, 0.11761959]), np.array([0.89821889, 0.11761983]), np.array([0.89821884, 0.11761954])],
-                  2680: [np.array([0.89821855, 0.11761983]), np.array([0.89821854, 0.11761956]), np.array([0.89821878, 0.11761979]), np.array([0.89821879, 0.11761955])],
-                  2690: [np.array([0.89821841, 0.11761982]), np.array([0.89821843, 0.11761953]), np.array([0.89821869, 0.11761988]), np.array([0.89821871, 0.11761957])],
-                  2700: [np.array([0.89821833, 0.11761987]), np.array([0.89821836, 0.1176196 ]), np.array([0.89821859, 0.11761996]), np.array([0.8982186 , 0.11761962])],
-                  2710: [np.array([0.89821819, 0.11761982]), np.array([0.89821824, 0.11761954]), np.array([0.89821844, 0.11761988]), np.array([0.89821852, 0.11761959])],
-                  2720: [np.array([0.89821811, 0.11761971]), np.array([0.89821817, 0.11761945]), np.array([0.89821834, 0.11761985]), np.array([0.8982184 , 0.11761956])],
-                  2730: [np.array([0.89821801, 0.11761958]), np.array([0.8982181 , 0.11761936]), np.array([0.89821822, 0.11761976]), np.array([0.89821831, 0.11761948])],
-                  2740: [np.array([0.89821789, 0.11761945]), np.array([0.89821801, 0.11761927]), np.array([0.8982181 , 0.11761968]), np.array([0.89821821, 0.11761941])],
-                  2750: [np.array([0.89821783, 0.11761924]), np.array([0.89821796, 0.11761902]), np.array([0.89821803, 0.11761951]), np.array([0.89821815, 0.11761925])],
-                  2760: [np.array([0.89821775, 0.11761919]), np.array([0.8982179 , 0.11761898]), np.array([0.89821793, 0.11761945]), np.array([0.89821809, 0.11761924])],
-                  2770: [np.array([0.89821769, 0.11761896]), np.array([0.89821786, 0.11761879]), np.array([0.89821785, 0.11761926]), np.array([0.89821799, 0.11761905])],
-                  2780: [np.array([0.89821763, 0.11761885]), np.array([0.89821781, 0.11761874]), np.array([0.89821778, 0.11761921]), np.array([0.89821795, 0.11761903])],
-                  2790: [np.array([0.89821764, 0.11761865]), np.array([0.89821781, 0.11761852]), np.array([0.89821773, 0.117619  ]), np.array([0.89821794, 0.11761885])],
-                  2800: [np.array([0.89821758, 0.11761845]), np.array([0.8982178 , 0.11761844]), np.array([0.89821768, 0.11761888]), np.array([0.89821786, 0.11761878])],
-                  2810: [np.array([0.89821762, 0.11761828]), np.array([0.89821782, 0.11761823]), np.array([0.89821767, 0.11761863]), np.array([0.89821786, 0.11761858])],
-                  2820: [np.array([0.89821762, 0.11761811]), np.array([0.89821782, 0.11761809]), np.array([0.89821768, 0.11761846]), np.array([0.89821787, 0.11761847])],
-                  2830: [np.array([0.8982176 , 0.11761785]), np.array([0.89821782, 0.11761794]), np.array([0.89821763, 0.11761827]), np.array([0.89821778, 0.11761825])],
-                  2840: [np.array([0.89821764, 0.11761772]), np.array([0.89821785, 0.11761781]), np.array([0.89821762, 0.11761806]), np.array([0.89821782, 0.11761816])],
-                  2850: [np.array([0.89821769, 0.11761756]), np.array([0.89821791, 0.11761762]), np.array([0.89821764, 0.11761792]), np.array([0.89821783, 0.11761802])],
-                  2860: [np.array([0.89821775, 0.11761733]), np.array([0.89821797, 0.11761748]), np.array([0.89821769, 0.11761774]), np.array([0.89821788, 0.11761787])],
-                  2870: [np.array([0.89821784, 0.11761722]), np.array([0.89821799, 0.11761738]), np.array([0.89821772, 0.11761758]), np.array([0.8982179, 0.1176177])],
-                  2880: [np.array([0.89821791, 0.11761706]), np.array([0.89821806, 0.11761728]), np.array([0.89821776, 0.11761739]), np.array([0.89821795, 0.11761757])],
-                  2890: [np.array([0.89821802, 0.1176169 ]), np.array([0.89821816, 0.11761709]), np.array([0.89821785, 0.11761718]), np.array([0.89821803, 0.11761742])],
-                  2900: [np.array([0.89821816, 0.11761674]), np.array([0.8982183 , 0.11761695]), np.array([0.89821796, 0.11761701]), np.array([0.89821813, 0.11761725])],
-                  2910: [np.array([0.8982183 , 0.11761663]), np.array([0.89821839, 0.11761693]), np.array([0.89821809, 0.11761689]), np.array([0.89821822, 0.11761716])],
-                  2920: [np.array([0.89821839, 0.11761659]), np.array([0.89821849, 0.11761682]), np.array([0.89821817, 0.11761677]), np.array([0.89821829, 0.11761699])],
-                  2930: [np.array([0.89821849, 0.11761656]), np.array([0.89821856, 0.11761682]), np.array([0.89821826, 0.11761675]), np.array([0.89821835, 0.117617  ])],
-                  2940: [np.array([0.89821858, 0.11761636]), np.array([0.89821867, 0.11761667]), np.array([0.89821837, 0.11761654]), np.array([0.89821843, 0.11761682])],
-                  2950: [np.array([0.89821871, 0.11761638]), np.array([0.89821878, 0.11761668]), np.array([0.89821849, 0.11761655]), np.array([0.89821858, 0.11761683])],
-                  2960: [np.array([0.89821882, 0.11761629]), np.array([0.89821891, 0.11761662]), np.array([0.89821858, 0.11761646]), np.array([0.89821867, 0.11761675])],
-                  2970: [np.array([0.89821894, 0.11761624]), np.array([0.89821902, 0.11761651]), np.array([0.89821871, 0.11761638]), np.array([0.89821879, 0.11761668])],
-                  2980: [np.array([0.89821906, 0.11761617]), np.array([0.89821913, 0.11761646]), np.array([0.89821885, 0.1176163 ]), np.array([0.89821891, 0.11761658])],
-                  2990: [np.array([0.8982192 , 0.11761604]), np.array([0.89821927, 0.11761636]), np.array([0.89821897, 0.11761616]), np.array([0.89821903, 0.11761647])],
-                  3000: [np.array([0.89821931, 0.11761604]), np.array([0.89821938, 0.11761634]), np.array([0.89821908, 0.11761618]), np.array([0.89821916, 0.11761646])],
-                  3010: [np.array([0.89821945, 0.11761593]), np.array([0.89821949, 0.11761623]), np.array([0.89821919, 0.11761612]), np.array([0.89821928, 0.11761641])],
-                  3020: [np.array([0.89821955, 0.1176159 ]), np.array([0.89821963, 0.11761619]), np.array([0.89821934, 0.11761603]), np.array([0.89821939, 0.11761628])],
-                  3030: [np.array([0.89821967, 0.11761584]), np.array([0.89821975, 0.11761614]), np.array([0.89821943, 0.11761595]), np.array([0.89821952, 0.11761625])],
-                  3040: [np.array([0.89821981, 0.11761578]), np.array([0.89821989, 0.11761606]), np.array([0.89821959, 0.1176159 ]), np.array([0.89821966, 0.11761618])],
-                  3050: [np.array([0.89821993, 0.11761572]), np.array([0.89822   , 0.11761598]), np.array([0.8982197 , 0.11761582]), np.array([0.89821976, 0.11761612])],
-                  3060: [np.array([0.89822007, 0.11761567]), np.array([0.89822015, 0.11761596]), np.array([0.89821983, 0.11761575]), np.array([0.89821989, 0.11761608])],
-                  3070: [np.array([0.89822017, 0.11761559]), np.array([0.89822025, 0.1176159 ]), np.array([0.89821995, 0.1176157 ]), np.array([0.89821999, 0.117616  ])],
-                  3080: [np.array([0.8982203 , 0.11761554]), np.array([0.89822035, 0.1176158 ]), np.array([0.89822005, 0.11761564]), np.array([0.8982201 , 0.11761591])],
-                  3090: [np.array([0.89822041, 0.11761548]), np.array([0.89822048, 0.11761578]), np.array([0.89822019, 0.1176156 ]), np.array([0.89822026, 0.11761585])],
-                  3100: [np.array([0.89822054, 0.1176154 ]), np.array([0.89822061, 0.11761572]), np.array([0.8982203 , 0.11761555]), np.array([0.89822035, 0.11761581])],
-                  3110: [np.array([0.89822067, 0.11761536]), np.array([0.89822073, 0.11761566]), np.array([0.89822045, 0.1176155 ]), np.array([0.8982205 , 0.11761577])],
-                  3120: [np.array([0.89822081, 0.11761532]), np.array([0.89822087, 0.11761561]), np.array([0.89822059, 0.11761542]), np.array([0.89822065, 0.1176157 ])],
-                  3130: [np.array([0.89822092, 0.11761531]), np.array([0.89822099, 0.11761563]), np.array([0.89822071, 0.11761537]), np.array([0.89822075, 0.11761569])],
-                  3140: [np.array([0.89822104, 0.11761523]), np.array([0.89822112, 0.11761551]), np.array([0.89822081, 0.11761533]), np.array([0.89822089, 0.11761561])],
-                  3150: [np.array([0.89822119, 0.1176152 ]), np.array([0.89822124, 0.11761547]), np.array([0.89822096, 0.11761529]), np.array([0.89822101, 0.11761557])],
-                  3160: [np.array([0.8982213 , 0.11761512]), np.array([0.89822136, 0.11761541]), np.array([0.89822107, 0.11761524]), np.array([0.89822111, 0.11761553])],
-                  3170: [np.array([0.89822143, 0.11761511]), np.array([0.8982215 , 0.11761538]), np.array([0.89822119, 0.11761516]), np.array([0.89822126, 0.11761548])],
-                  3180: [np.array([0.89822154, 0.11761504]), np.array([0.89822161, 0.11761535]), np.array([0.89822133, 0.11761515]), np.array([0.89822137, 0.11761538])],
-                  3190: [np.array([0.89822168, 0.11761499]), np.array([0.89822174, 0.11761531]), np.array([0.89822145, 0.11761507]), np.array([0.89822153, 0.11761534])],
-                  3200: [np.array([0.8982218 , 0.11761494]), np.array([0.89822184, 0.11761523]), np.array([0.89822155, 0.11761505]), np.array([0.89822162, 0.11761534])],
-                  3210: [np.array([0.8982219 , 0.11761489]), np.array([0.89822196, 0.11761517]), np.array([0.89822167, 0.11761499]), np.array([0.89822173, 0.11761526])],
-                  3220: [np.array([0.89822201, 0.11761483]), np.array([0.8982221, 0.1176151]), np.array([0.8982218 , 0.11761493]), np.array([0.89822188, 0.11761517])],
-                  3230: [np.array([0.89822214, 0.11761479]), np.array([0.89822219, 0.11761505]), np.array([0.89822191, 0.11761489]), np.array([0.89822198, 0.11761518])],
-                  3240: [np.array([0.89822225, 0.11761473]), np.array([0.89822232, 0.11761506]), np.array([0.89822201, 0.11761485]), np.array([0.89822209, 0.11761512])],
-                  3250: [np.array([0.89822237, 0.11761475]), np.array([0.89822243, 0.117615  ]), np.array([0.89822212, 0.11761482]), np.array([0.89822219, 0.11761507])],
-                  3260: [np.array([0.89822246, 0.11761467]), np.array([0.89822253, 0.11761496]), np.array([0.89822225, 0.11761478]), np.array([0.89822231, 0.11761506])],
-                  3270: [np.array([0.89822257, 0.1176146 ]), np.array([0.89822265, 0.11761487]), np.array([0.89822235, 0.11761471]), np.array([0.8982224 , 0.11761498])],
-                  3290: [np.array([0.89822279, 0.11761449]), np.array([0.89822287, 0.11761474]), np.array([0.89822258, 0.11761461]), np.array([0.89822265, 0.11761488])],
-                  3300: [np.array([0.89822286, 0.11761438]), np.array([0.89822293, 0.11761463]), np.array([0.89822264, 0.11761454]), np.array([0.89822274, 0.11761478])],
-                  3310: [np.array([0.89822292, 0.11761428]), np.array([0.89822303, 0.11761452]), np.array([0.89822272, 0.11761447]), np.array([0.89822283, 0.11761473])],
-                  3320: [np.array([0.89822298, 0.11761413]), np.array([0.89822313, 0.11761435]), np.array([0.89822282, 0.11761437]), np.array([0.89822294, 0.11761458])],
-                  3330: [np.array([0.89822301, 0.11761399]), np.array([0.89822318, 0.11761421]), np.array([0.89822287, 0.11761427]), np.array([0.89822304, 0.1176145 ])],
-                  3340: [np.array([0.89822307, 0.11761383]), np.array([0.89822323, 0.11761401]), np.array([0.89822294, 0.11761414]), np.array([0.8982231 , 0.11761429])],
-                  3350: [np.array([0.89822311, 0.11761368]), np.array([0.89822326, 0.11761381]), np.array([0.89822298, 0.117614  ]), np.array([0.89822317, 0.1176141 ])],
-                  3360: [np.array([0.89822314, 0.11761347]), np.array([0.89822331, 0.11761357]), np.array([0.89822303, 0.11761383]), np.array([0.89822323, 0.11761397])],
-                  3370: [np.array([0.89822316, 0.11761328]), np.array([0.89822336, 0.11761342]), np.array([0.8982231 , 0.11761364]), np.array([0.89822327, 0.11761375])],
-                  3380: [np.array([0.89822318, 0.11761307]), np.array([0.8982234 , 0.11761323]), np.array([0.89822314, 0.11761343]), np.array([0.89822333, 0.11761355])],
-                  3390: [np.array([0.89822328, 0.11761288]), np.array([0.89822348, 0.11761304]), np.array([0.89822319, 0.11761324]), np.array([0.8982234 , 0.11761334])],
-                  3400: [np.array([0.89822334, 0.11761273]), np.array([0.89822354, 0.11761284]), np.array([0.89822327, 0.11761306]), np.array([0.89822343, 0.1176132 ])],
-                  3410: [np.array([0.89822339, 0.11761257]), np.array([0.89822357, 0.11761272]), np.array([0.89822331, 0.11761289]), np.array([0.89822347, 0.11761302])],
-                  3420: [np.array([0.89822347, 0.1176124 ]), np.array([0.89822363, 0.11761258]), np.array([0.89822336, 0.11761269]), np.array([0.8982235 , 0.11761287])],
-                  3430: [np.array([0.89822356, 0.1176123 ]), np.array([0.89822373, 0.11761247]), np.array([0.89822345, 0.11761256]), np.array([0.89822358, 0.11761276])],
-                  3440: [np.array([0.89822369, 0.11761218]), np.array([0.89822383, 0.1176124 ]), np.array([0.89822353, 0.11761245]), np.array([0.89822366, 0.11761264])],
-                  3450: [np.array([0.89822378, 0.11761207]), np.array([0.8982239 , 0.11761234]), np.array([0.89822356, 0.11761229]), np.array([0.89822372, 0.11761256])],
-                  3460: [np.array([0.89822391, 0.11761202]), np.array([0.89822402, 0.11761225]), np.array([0.89822371, 0.1176122 ]), np.array([0.89822383, 0.11761245])],
-                  3470: [np.array([0.89822405, 0.11761188]), np.array([0.89822413, 0.11761216]), np.array([0.89822382, 0.11761206]), np.array([0.89822391, 0.11761235])],
-                  3480: [np.array([0.89822419, 0.11761185]), np.array([0.89822425, 0.11761216]), np.array([0.89822398, 0.11761198]), np.array([0.89822403, 0.11761226])],
-                  3490: [np.array([0.89822431, 0.11761185]), np.array([0.89822438, 0.11761215]), np.array([0.89822406, 0.11761192]), np.array([0.89822414, 0.1176122 ])],
-                  3500: [np.array([0.89822444, 0.11761182]), np.array([0.89822447, 0.11761217]), np.array([0.89822421, 0.11761191]), np.array([0.89822425, 0.11761218])],
-                  3510: [np.array([0.89822458, 0.11761192]), np.array([0.89822458, 0.1176122 ]), np.array([0.89822436, 0.11761191]), np.array([0.89822432, 0.11761223])],
-                  3520: [np.array([0.8982247 , 0.11761197]), np.array([0.89822467, 0.11761229]), np.array([0.89822447, 0.11761193]), np.array([0.89822445, 0.11761222])],
-                  3530: [np.array([0.89822482, 0.11761206]), np.array([0.89822478, 0.11761232]), np.array([0.89822458, 0.11761196]), np.array([0.89822454, 0.11761225])],
-                  3540: [np.array([0.89822494, 0.11761217]), np.array([0.89822487, 0.11761247]), np.array([0.8982247 , 0.11761202]), np.array([0.89822463, 0.1176123 ])],
-                  3550: [np.array([0.89822501, 0.11761232]), np.array([0.89822493, 0.11761262]), np.array([0.8982248 , 0.11761212]), np.array([0.89822473, 0.11761241])],
-                  3560: [np.array([0.89822512, 0.11761248]), np.array([0.89822499, 0.1176127 ]), np.array([0.89822494, 0.11761226]), np.array([0.89822483, 0.11761246])],
-                  3570: [np.array([0.8982252 , 0.11761258]), np.array([0.89822509, 0.11761279]), np.array([0.89822504, 0.11761235]), np.array([0.8982249 , 0.11761254])],
-                  3580: [np.array([0.89822526, 0.1176128 ]), np.array([0.89822513, 0.117613  ]), np.array([0.89822513, 0.11761255]), np.array([0.89822497, 0.11761271])],
-                  3590: [np.array([0.89822532, 0.117613  ]), np.array([0.89822516, 0.11761318]), np.array([0.89822522, 0.11761277]), np.array([0.89822501, 0.11761285])],
-                  3600: [np.array([0.89822537, 0.11761322]), np.array([0.89822522, 0.11761334]), np.array([0.89822526, 0.11761288]), np.array([0.89822508, 0.11761299])],
-                  3610: [np.array([0.89822534, 0.11761338]), np.array([0.89822519, 0.11761344]), np.array([0.89822525, 0.11761301]), np.array([0.89822511, 0.11761311])],
-                  3620: [np.array([0.89822536, 0.11761353]), np.array([0.8982252, 0.1176136]), np.array([0.89822532, 0.11761321]), np.array([0.89822513, 0.11761323])],
-                  3630: [np.array([0.89822533, 0.11761377]), np.array([0.89822514, 0.11761377]), np.array([0.89822532, 0.11761337]), np.array([0.89822512, 0.11761338])],
-                  3640: [np.array([0.89822534, 0.117614  ]), np.array([0.89822515, 0.11761396]), np.array([0.89822537, 0.11761363]), np.array([0.89822516, 0.11761361])],
-                  3650: [np.array([0.89822528, 0.11761422]), np.array([0.89822512, 0.11761414]), np.array([0.89822534, 0.11761383]), np.array([0.89822516, 0.11761377])],
-                  3660: [np.array([0.89822522, 0.11761444]), np.array([0.89822505, 0.11761434]), np.array([0.89822529, 0.11761412]), np.array([0.89822513, 0.11761397])],
-                  3670: [np.array([0.89822516, 0.11761458]), np.array([0.89822501, 0.11761445]), np.array([0.89822524, 0.11761423]), np.array([0.89822508, 0.11761412])],
-                  3680: [np.array([0.89822504, 0.11761475]), np.array([0.8982249 , 0.11761459]), np.array([0.89822518, 0.11761443]), np.array([0.89822501, 0.11761429])],
-                  3690: [np.array([0.89822492, 0.11761488]), np.array([0.89822479, 0.11761473]), np.array([0.89822508, 0.11761465]), np.array([0.89822494, 0.11761444])],
-                  3700: [np.array([0.89822481, 0.11761503]), np.array([0.8982247 , 0.11761482]), np.array([0.89822497, 0.11761476]), np.array([0.89822486, 0.11761456])],
-                  3710: [np.array([0.89822467, 0.11761516]), np.array([0.89822458, 0.11761492]), np.array([0.89822488, 0.11761496]), np.array([0.89822478, 0.11761471])],
-                  3720: [np.array([0.89822452, 0.1176152 ]), np.array([0.89822446, 0.11761491]), np.array([0.89822475, 0.11761506]), np.array([0.89822467, 0.1176148 ])],
-                  3730: [np.array([0.89822437, 0.11761528]), np.array([0.89822432, 0.11761501]), np.array([0.8982246 , 0.11761516]), np.array([0.89822452, 0.11761486])],
-                  3740: [np.array([0.89822424, 0.11761537]), np.array([0.89822419, 0.11761512]), np.array([0.89822446, 0.11761525]), np.array([0.89822441, 0.11761497])],
-                  3750: [np.array([0.89822409, 0.11761541]), np.array([0.89822403, 0.11761514]), np.array([0.89822434, 0.11761533]), np.array([0.89822427, 0.11761502])],
-                  3760: [np.array([0.89822393, 0.11761549]), np.array([0.8982239 , 0.11761522]), np.array([0.89822418, 0.1176154 ]), np.array([0.89822413, 0.11761511])],
-                  3770: [np.array([0.89822381, 0.11761553]), np.array([0.89822377, 0.11761526]), np.array([0.89822404, 0.11761544]), np.array([0.89822399, 0.11761517])],
-                  3780: [np.array([0.89822363, 0.11761555]), np.array([0.89822362, 0.11761532]), np.array([0.89822388, 0.1176155 ]), np.array([0.89822383, 0.11761519])],
-                  3790: [np.array([0.89822352, 0.11761563]), np.array([0.89822349, 0.11761537]), np.array([0.89822376, 0.11761557]), np.array([0.89822371, 0.11761528])],
-                  3800: [np.array([0.89822338, 0.1176157 ]), np.array([0.89822332, 0.11761542]), np.array([0.8982236 , 0.11761563]), np.array([0.89822356, 0.11761534])],
-                  3810: [np.array([0.89822321, 0.11761574]), np.array([0.89822316, 0.11761543]), np.array([0.89822345, 0.11761566]), np.array([0.8982234 , 0.11761535])],
-                  3820: [np.array([0.89822308, 0.11761581]), np.array([0.89822303, 0.11761549]), np.array([0.89822332, 0.11761572]), np.array([0.89822327, 0.11761542])],
-                  3830: [np.array([0.89822295, 0.11761587]), np.array([0.89822291, 0.11761557]), np.array([0.89822317, 0.11761577]), np.array([0.89822315, 0.11761547])],
-                  3840: [np.array([0.8982228 , 0.11761589]), np.array([0.89822274, 0.11761561]), np.array([0.89822304, 0.11761582]), np.array([0.89822301, 0.11761551])],
-                  3850: [np.array([0.89822265, 0.11761593]), np.array([0.89822261, 0.11761565]), np.array([0.89822289, 0.11761586]), np.array([0.89822285, 0.11761556])],
-                  3860: [np.array([0.89822249, 0.11761599]), np.array([0.89822243, 0.11761571]), np.array([0.89822272, 0.11761591]), np.array([0.89822269, 0.11761562])],
-                  3870: [np.array([0.89822235, 0.11761605]), np.array([0.89822231, 0.11761578]), np.array([0.89822261, 0.11761597]), np.array([0.89822254, 0.11761568])],
-                  3880: [np.array([0.8982222 , 0.11761612]), np.array([0.89822215, 0.1176158 ]), np.array([0.89822245, 0.11761603]), np.array([0.89822242, 0.11761573])],
-                  3890: [np.array([0.89822208, 0.11761613]), np.array([0.89822205, 0.11761585]), np.array([0.89822232, 0.11761604]), np.array([0.89822227, 0.11761576])],
-                  3900: [np.array([0.89822193, 0.11761621]), np.array([0.89822188, 0.11761595]), np.array([0.89822218, 0.11761613]), np.array([0.89822211, 0.11761584])],
-                  3910: [np.array([0.8982218 , 0.11761628]), np.array([0.89822176, 0.11761601]), np.array([0.89822204, 0.1176162 ]), np.array([0.898222 , 0.1176159])],
-                  3920: [np.array([0.89822163, 0.11761634]), np.array([0.89822158, 0.11761605]), np.array([0.89822187, 0.11761622]), np.array([0.89822183, 0.11761593])],
-                  3930: [np.array([0.89822149, 0.11761637]), np.array([0.89822147, 0.11761614]), np.array([0.89822175, 0.1176163 ]), np.array([0.8982217 , 0.11761601])],
-                  3940: [np.array([0.89822137, 0.11761648]), np.array([0.89822132, 0.11761619]), np.array([0.8982216 , 0.11761636]), np.array([0.89822154, 0.11761605])],
-                  3950: [np.array([0.89822124, 0.11761654]), np.array([0.89822117, 0.11761627]), np.array([0.89822147, 0.11761644]), np.array([0.8982214 , 0.11761614])],
-                  3960: [np.array([0.8982211 , 0.11761666]), np.array([0.89822104, 0.11761638]), np.array([0.89822134, 0.11761651]), np.array([0.89822126, 0.11761622])],
-                  3970: [np.array([0.89822101, 0.11761676]), np.array([0.89822092, 0.11761651]), np.array([0.89822123, 0.11761661]), np.array([0.89822114, 0.11761633])],
-                  3980: [np.array([0.89822087, 0.11761687]), np.array([0.89822078, 0.11761663]), np.array([0.89822109, 0.11761667]), np.array([0.89822099, 0.11761642])],
-                  3990: [np.array([0.89822079, 0.11761702]), np.array([0.89822067, 0.1176168 ]), np.array([0.89822099, 0.11761682]), np.array([0.89822085, 0.11761656])],
-                  4000: [np.array([0.8982207 , 0.11761717]), np.array([0.89822057, 0.11761693]), np.array([0.89822089, 0.11761694]), np.array([0.89822077, 0.1176167 ])],
-                  4010: [np.array([0.89822062, 0.11761727]), np.array([0.89822046, 0.11761703]), np.array([0.89822079, 0.11761697]), np.array([0.89822065, 0.11761676])],
-                  4020: [np.array([0.89822052, 0.11761739]), np.array([0.89822037, 0.11761717]), np.array([0.89822073, 0.1176171 ]), np.array([0.89822057, 0.11761686])],
-                  2341: [np.array([0.89822096, 0.11761685]), np.array([0.89822086, 0.11761661]), np.array([0.89822116, 0.11761667]), np.array([0.89822106, 0.11761645])],
-                  2348: [np.array([0.89822093, 0.11761686]), np.array([0.89822084, 0.1176166 ]), np.array([0.89822114, 0.11761672]), np.array([0.89822107, 0.11761643])],
-                  2354: [np.array([0.89822096, 0.11761687]), np.array([0.89822085, 0.11761661]), np.array([0.89822117, 0.11761671]), np.array([0.89822105, 0.11761646])],
-                  2366: [np.array([0.89822093, 0.11761692]), np.array([0.89822084, 0.11761666]), np.array([0.89822114, 0.11761674]), np.array([0.89822104, 0.11761648])],
-                  2373: [np.array([0.89822091, 0.11761692]), np.array([0.89822079, 0.11761666]), np.array([0.89822114, 0.11761675]), np.array([0.89822101, 0.11761649])],
-                  2342: [np.array([0.89822095, 0.11761687]), np.array([0.89822084, 0.1176166 ]), np.array([0.89822116, 0.1176167 ]), np.array([0.89822105, 0.11761644])]
-                  }
+        carpos = {}
+        with open("C:/Users/Idefix/PycharmProjects/datasets/testrun_2022_12_17/processed_data/dronefrnr_carposes.txt") as f:
+            for line in f.readlines():
+                dronefrnr = int(line.split("_")[0])
+                carposes = [np.array([float(tmp.split("#")[0]), float(tmp.split("#")[1])]) for tmp in line.split("_")[1].split(",")]
+                carpos[dronefrnr] = carposes
     else:
         # fit function from pixel-positions in drone image to gps-positions on earth
         # calculate positions from data
@@ -1217,13 +1064,13 @@ def custom_pnp_find_parameters():
 
     all_true_dist = np.array(all_true_dist)
     all_estfrom_dist = np.array(all_estfrom_dist)
-    fit_linpp_and_print(in_x=all_estfrom_dist, out_true=all_true_dist, name="dist_total")
+    fit_poly_fun_and_print(in_x=all_estfrom_dist, out_true=all_true_dist, name="dist_total", exponents=[0, 1, 2])
     # parameters[dist_total] = [-1.90217367e+03  3.05375783e+05 -9.73326783e-03  1.12787139e+01]
     # diff_dist_total =  1.0695141605801541
 
     all_true_angle = np.array(all_true_angle)
     all_estfrom_angle = np.array(all_estfrom_angle)
-    fit_linpp_and_print(in_x=all_estfrom_angle, out_true=all_true_angle, name="bearing_total")
+    fit_poly_fun_and_print(in_x=all_estfrom_angle, out_true=all_true_angle, name="bearing_total", exponents=[0, 1, 2])
     # parameters[bearing_total] = [ 0.96307476 -0.10296335 -0.00138886 -0.76054734]
     # diff_bearing_total =  0.0662130889486984
 
@@ -1811,38 +1658,110 @@ def test_Slam():
     print(f"nonSlam5 & {tot_dist/truepositives} & {truepositives} & {falsenegatives} & {falsepositives} & ? \\\\")
 
 
-
-def main():
+def get_true_carstate():
     sdd = read_csv("merged_rundata_csv/alldata_2022_12_17-14_43_59_id3.csv")
+    #relevant_keys = ["BMS_SOC_UsbFlRec", "Converter_L_N_actual_UsbFlRec", "Converter_R_N_actual_UsbFlRec",
+    #"Converter_L_RPM_Actual_Filtered_UsbFlRec", "Converter_R_RPM_Actual_Filtered_UsbFlRec",
+    #"Converter_L_Torque_Out_UsbFlRec", "Converter_R_Torque_Out_UsbFlRec",
+    # "ECU_ACC_X_UsbFlRec", "ECU_ACC_Y_UsbFlRec", "ECU_ACC_Z_UsbFlRec",
+    # "GNSS_heading_UsbFlRec", "GNSS_latitude_UsbFlRec", "GNSS_longitude_UsbFlRec", "GNSS_speed_over_ground_UsbFlRec",
+    # "SWS_angle_UsbFlRec"]
+    vabs_gnss_time = sdd["GNSS_speed_over_ground_UsbFlRec"+x_ending]
+    vabs_gnss_value = sdd["GNSS_speed_over_ground_UsbFlRec"]
+    heading_gnss_time = sdd["GNSS_heading_UsbFlRec"+x_ending]
+    heading_gnss_value = sdd["GNSS_heading_UsbFlRec"]*np.pi/180
+    ax_imu_time = sdd["ECU_ACC_X_UsbFlRec"+x_ending]
+    ax_imu_value = sdd["ECU_ACC_X_UsbFlRec"]
+    ay_imu_time = sdd["ECU_ACC_Y_UsbFlRec"+x_ending]
+    ay_imu_value = sdd["ECU_ACC_Y_UsbFlRec"]
+    az_imu_time = sdd["ECU_ACC_Z_UsbFlRec"+x_ending]
+    az_imu_value = sdd["ECU_ACC_Z_UsbFlRec"]
+
     poi_true_gps_positions_radiants, carpos = true_pos_from_droneimg_pxpos()
+
+    # get absolute velocity from droneview carpositions
     carposkeys = list(carpos.keys())
     carposkeys.sort()
-    true_absv_time = [0 for _ in range(len(carposkeys))]
-    true_absv_value = [0 for _ in range(len(carposkeys))]
-    def carposes2carpos(cps):
-        return 0.25*np.array(cps[0])+0.25*np.array(cps[1])+0.25*np.array(cps[2])+0.25*np.array(cps[3])
-    for i in range(len(carposkeys)-1):
-        if carposkeys[i+1] > carposkeys[i]:
-            t0 = drone2t(carposkeys[i])
-            t1 = drone2t(carposkeys[i+1])
-            true_absv_time[i] = 0.5*t0+0.5*t1
-            true_absv_value[i] = gps_util.gps_to_dist(carposes2carpos(carpos[carposkeys[i]]), carposes2carpos(carpos[carposkeys[i+1]]))/(t1-t0)
-        else:
-            print("shouldnt be")
-    time, v_droneview_value, v_gps_value = timesinc(true_absv_time, true_absv_value, [ssdt2t(t) for t in sdd["GNSS_speed_over_ground_UsbFlRec"+x_ending]], sdd["GNSS_speed_over_ground_UsbFlRec"])
-    plot_and_save("v from gps and drone", x_in=time, ys=[v_droneview_value, v_gps_value], names=["droneview", "gps"])
+    abs_v_droneview_time = [0.0 for _ in range(len(carposkeys))]
+    abs_v_droneview_value = [0.0 for _ in range(len(carposkeys))]
+    abs_v_droneview_time[0] = t2ssdt(drone2t(carposkeys[0]))-0.001
+    for i in range(1, len(carposkeys), 1):
+        t0 = t2ssdt(drone2t(carposkeys[i-1]))
+        t1 = t2ssdt(drone2t(carposkeys[i]))
+        abs_v_droneview_time[i] = 0.5*t0+0.5*t1
+        abs_v_droneview_value[i] = gps_util.gps_to_dist(gps_util.average(carpos[carposkeys[i-1]]), gps_util.average(carpos[carposkeys[i]]))/(t1-t0)
+    print("abs_v_droneview_time =", abs_v_droneview_time[:10])
+    print("abs_v_droneview_value =", abs_v_droneview_value[:10])
+    vabs_time, sincd_vabs_droneview_value, sincd_vabs_gps_value = timesinc(abs_v_droneview_time, abs_v_droneview_value, vabs_gnss_time, vabs_gnss_value)
+    plot_and_save("vabs from gps and drone", x_in=vabs_time, ys=[smothing(vabs_time, sincd_vabs_droneview_value, 0.5), sincd_vabs_gps_value], names=["droneview", "gps"])
+
+    # get heading from droneview carpositions
+    heading_droneview_time = [0.0 for _ in range(len(carposkeys))]
+    heading_droneview_value = [0.0 for _ in range(len(carposkeys))]
+    for i in range(len(carposkeys)):
+        heading_droneview_time[i] = t2ssdt(drone2t(carposkeys[i]))
+        heading_droneview_value[i] = gps_util.carposs_to_heading(carpos[carposkeys[i]])
+    heading_time, sincd_heading_droneview_value, sincd_heading_gps_value = timesinc(heading_droneview_time, heading_droneview_value, heading_gnss_time, heading_gnss_value)
+    plot_and_save("heading from gps and drone", x_in=heading_time, ys=[sincd_heading_droneview_value, np.array([to_range(x) for x in sincd_heading_gps_value])], names=["droneview", "gps"], avgs=False)
+
+    # derivitate of zip(gnss_vabs_time, gnss_vabs_value)
+    smothed_gpsv = smothing(time=vabs_gnss_time, values=vabs_gnss_value, t=1)
+    ax_time = np.array([(0.5*vabs_gnss_time[i+1]+0.5*vabs_gnss_time[i]) for i in range(len(smothed_gpsv)-1)])
+    ax_gnss_value = [(vabs_gnss_value[i+1]-vabs_gnss_value[i])/(vabs_gnss_time[i+1]-vabs_gnss_time[i]) for i in range(len(vabs_gnss_value)-1)]
+    imu_ax_value_meadian = np.median(ax_imu_value)
+    imu_ay_value_meadian = np.median(ay_imu_value)
+    imu_az_value_meadian = np.median(az_imu_value)
+    imu_aabs_value = [np.sqrt((ax_imu_value[i]-imu_ax_value_meadian)**2+(ay_imu_value[i]-imu_ay_value_meadian)**2+(az_imu_value[i]-imu_az_value_meadian)**2) for i in range(len(ax_imu_time))]
+    imu_aabs_value = smothing(ax_imu_time, imu_aabs_value, 3)
+    syncd_ax_time, synced_imu_aabs_vale, synced_aabs_gnss_value = timesinc(ax_imu_time, imu_aabs_value, ax_time, ax_gnss_value)
+    plot_and_save("aabs from gnss_vabs", x_in=ax_time, ys=[smothing(ax_time, ax_gnss_value, 3), synced_imu_aabs_vale], names=["aabs_gnss_value", "aabs_imu_value"], avgs=False)
+
+    # derivitate of zip(gnss_heading_time, gnss_heading_value)
+    smothed_gps_heading = smothing(time=heading_gnss_time, values=heading_gnss_value, t=1)
+    yawrate_time = [(0.5*heading_gnss_time[i+1]+0.5*heading_gnss_time[i]) for i in range(len(smothed_gps_heading)-1)]
+    yawrate_gps_value = [(smothed_gps_heading[i+1]-smothed_gps_heading[i])/(heading_gnss_time[i+1]-heading_gnss_time[i]) for i in range(len(heading_gnss_time)-1)]
+    smothed_dv_heading = smothing(heading_droneview_time, heading_droneview_value, t=1)
+    yawrate_dv_value = [(smothed_dv_heading[i+1]-smothed_dv_heading[i])/(heading_droneview_time[i+1]-heading_droneview_time[i]) for i in range(len(heading_droneview_time)-1)]
+    plot_and_save("yawrate", x_in=yawrate_time, ys=[yawrate_gps_value, yawrate_dv_value], names=["yawrate_value", "yawrate_dv_value"], avgs=False)
+
+    true_v_value = smothing(vabs_gnss_time, vabs_gnss_value, 0.5)
+    true_v_time = vabs_gnss_time
+    true_ax_value = smothing(ax_time, ax_gnss_value, 3)
+    true_ax_time = ax_time
+    for k in ["Converter_L_Torque_Out_UsbFlRec", "Converter_R_Torque_Out_UsbFlRec"]:
+        k_name = k_to_name(k)
+        print(f"\nname = {k_name}\n")
+
+        k_time = sdd[k+x_ending]
+        time, syncd_true_v_value, kv = timesinc(true_v_time, true_v_value, k_time, smothing(k_time, sdd[k], 5))
+        offset = syncd_true_v_value[0]-kv[0]
+        fac = np.sum(syncd_true_v_value-offset)/np.sum(kv)
+        #fun, parameters = fit_poly_fun_and_print(fac*kv+offset, tv, f"{k} to v", exponents=[0, 1])
+        fig, axe = plt.subplots()
+        axe.set_title(f"fit linear from {k_name} to vx")
+        axe.plot(time, syncd_true_v_value, label="true_vabs")
+        #axe.plot(time, np.array([fun(x, parameters) for x in kv]), label="fun(kv)")
+        axe.plot(time, fac*kv+offset, label=f"{fac:.2E}*{k_name}+{offset:.2E}")
+        axe.legend()
+        axe.grid()
+        fig.show()
+
+        time, syncd_true_ax_value, ka = timesinc(true_ax_time, true_ax_value, sdd[k+x_ending], smothing(k_time, sdd[k], 5))
+        offset = syncd_true_ax_value[0]-ka[0]
+        fac = np.sum(syncd_true_ax_value-offset)/np.sum(ka)
+        #fun, parameters = fit_poly_fun_and_print(ka, ta, f"{k} to ax", exponents=[0, 1])
+        fig, axe = plt.subplots()
+        axe.set_title(f"fit linear from {k_name} to ax")
+        axe.plot(time, syncd_true_ax_value, label="true_aabs")
+        axe.plot(time, fac*ka+offset, label=f"{fac:.2E}*{k_name}+{offset:.2E}")
+        #axe.plot(time, np.array([fun(x, parameters) for x in ka]), label="fun(ka)")
+        axe.legend()
+        axe.grid()
+        fig.show()
 
 
-    #visualise_data(sdd)
-    sdd["true_v"] = np.array(true_absv_value)
-    sdd["true_v"+x_ending] = np.array(true_absv_time)
-    print("sdd[Converter_L_RPM_Actual_Filtered_UsbFlRec] =", sdd["Converter_L_RPM_Actual_Filtered_UsbFlRec"])
-    plot_and_save("RPM_L", sdd["Converter_L_RPM_Actual_Filtered_UsbFlRec"+x_ending], [sdd["Converter_L_RPM_Actual_Filtered_UsbFlRec"]])
-    plot_and_save("RPM_R", sdd["Converter_R_RPM_Actual_Filtered_UsbFlRec" + x_ending], [sdd["Converter_R_RPM_Actual_Filtered_UsbFlRec"]])
-    averegae_diff(sdd, "Converter_L_RPM_Actual_Filtered_UsbFlRec", "true_v")
-    averegae_diff(sdd, "Converter_R_RPM_Actual_Filtered_UsbFlRec", "true_v")
-    averegae_diff(sdd, "Converter_L_RPM_Actual_Filtered_UsbFlRec", "GNSS_speed_over_ground_UsbFlRec")
-    averegae_diff(sdd, "Converter_R_RPM_Actual_Filtered_UsbFlRec", "GNSS_speed_over_ground_UsbFlRec")
+def main():
+    get_true_carstate()
 
 
 if __name__ == "__main__":
@@ -1860,7 +1779,7 @@ def all_functions():
     to_range()
     get_at_time()
     timesinc()
-    fit_linpp_and_print()
+    fit_poly_fun_and_print()
     avg_pxprom_from_conekeypoints()
     timestr2datetime()
     get_path()
