@@ -136,66 +136,39 @@ def get_at_time(x: [seconds], y: [float], t: seconds) -> (float, int):
             return (w1*y[i-1]+w0*y[i])/(w0+w1), i-1 if w0 < w1 else i
 
 
-def onsided_timesinc(in_time, in_value, target_time) -> ([seconds], [float]):
-    # return the same as [get_at_time(value_time, value_value, t) for t in target_time] would, but is computationally faster.
-    assert len(in_time) == len(in_value)
-    in_index = 0
-    synced_in_value = []
-    for t in target_time:
-        while in_index + 1 < len(in_time) and in_time[in_index + 1] < t:
-            in_index += 1
-        # in_time[in_index] < t < in_time[in_index+1]
-        if in_index + 1 >= len(in_time):
-            in_index = len(in_time) - 2
-            synced_in_value.append(in_value[-1])
-        elif in_index == 0:
-            synced_in_value.append(in_value[0])
-        else:
-            # append weighted average
-            w0 = abs(in_time[in_index] - t)
-            w1 = abs(in_time[in_index + 1] - t)
-            synced_in_value.append((w0 * in_value[in_index] + w1 * in_value[in_index + 1]) / (w0 + w1))
-    synced_in_value = np.array(synced_in_value)
-    assert len(target_time) == len(synced_in_value)
-    return synced_in_value
-
-def timesinc(a_x: [seconds], a_y: [float], b_x: [seconds], b_y: [float]) -> ([seconds], [float], [float]):
-    # return timesteps, a_y, b_y, so that (timesteps, a_y) and timesteps, b_y) are valid time-data pairs, and that a_y and b_y are as close to the input a_y and b_y as possible
-    timesteps = np.array(sorted(list(set(a_x).union(set(b_x)))))
-    i0 = 0
-    i1 = 1
-    sy0 = []
-    sy1 = []
+def multi_timesinc(data: [([seconds], [float])]) -> ([seconds], [[float]]):
+    # syncd_time, (syncd_a_value, syncd_b_value, syncd_c_value, ...) = multi_timesinc([(a_time, a_value), (b_time, b_value), (c_time, c_value), ...])
+    for (data_time, data_value) in data:
+        assert len(data_time) == len(data_value)
+    indexe = [0 for _ in range(len(data))]
+    r = [[] for _ in range(len(data))]
+    timesteps = []
+    for (data_time, data_value) in data:
+        timesteps += list(data_time)
+    timesteps = np.array(sorted(timesteps))
     for t in timesteps:
-        while i0 + 1 < len(a_x) and a_x[i0 + 1] < t:
-            i0 += 1
-        while i1+1 < len(b_x) and b_x[i1 + 1] < t:
-            i1 += 1
-        # x0[i0] < t < x0[i0+1]
-        if i0 + 1 >= len(a_x):
-            i0 = len(a_x) - 2
-            sy0.append(a_y[-1])
-        elif i0 == 0:
-            sy0.append(a_y[0])
-        else:
-            # append weighted average
-            w0 = abs(a_x[i0] - t)
-            w1 = abs(a_x[i0 + 1] - t)
-            sy0.append((w0 * a_y[i0] + w1 * a_y[i0 + 1]) / (w0 + w1))
-        if i1 + 1 >= len(b_x):
-            i1 = len(b_x) - 2
-            sy1.append(b_y[-1])
-        elif i1 == 0:
-            sy1.append(b_y[0])
-        else:
-            # append weighted average
-            w0 = abs(b_x[i1] - t)
-            w1 = abs(b_x[i1 + 1] - t)
-            sy1.append((w0 * b_y[i1] + w1 * b_y[i1 + 1]) / (w0 + w1))
-    sy0 = np.array(sy0)
-    sy1 = np.array(sy1)
-    assert len(timesteps) == len(sy0) == len(sy1)
-    return timesteps, sy0, sy1
+        for indexei in range(len(indexe)):
+            in_data_time = data[indexei][0]
+            in_data_value = data[indexei][1]
+            while indexe[indexei]+1 < len(in_data_time) and in_data_time[indexe[indexei]+1] <= t:
+                indexe[indexei] += 1
+            ii = min(indexe[indexei], len(in_data_time)-2)
+            # timesteps[ii] <= t < timesteps[ii+1]
+            if in_data_time[ii] == t:
+                r[indexei].append(float(in_data_value[ii]))
+            elif ii+1 >= len(in_data_time) or in_data_time[ii] >= timesteps[-1]:
+                indexe[indexei] = len(in_data_time)-2
+                r[indexei].append(in_data_value[-1])
+            elif in_data_time[ii] > t or in_data_time[ii] <= timesteps[0]:  # (in_data_time[ii] > t) iff (ii=0 and min(in_data_time) > t
+                r[indexei].append(in_data_value[0])
+            else:
+                w0 = abs(in_data_time[ii] - t)
+                w1 = abs(in_data_time[ii + 1] - t)
+                r[indexei].append((w1*in_data_value[ii] + w0*in_data_value[ii+1]) / (w0 + w1))
+    assert len(r) == len(data)
+    for r_value in r:
+        assert len(timesteps) == len(r_value)
+    return np.array(timesteps), [np.array(data_value) for data_value in r]
 
 
 def fit_poly_fun_and_print(in_x, out_true, name, exponents=[-1, 0, 1, 2]):
@@ -207,7 +180,7 @@ def fit_poly_fun_and_print(in_x, out_true, name, exponents=[-1, 0, 1, 2]):
     fo = np.array([(1 if i == 1 else 0) for i in exponents])
 
     def fun(x, t):
-        return np.sum([t[i]*x**v for (i, v) in enumerate(exponents)])
+        return sum([t[i]*x**v for (i, v) in enumerate(exponents)])  # np.sum returns deep sum, that means the result is float, even if x is np.array
         #return t[0]*x + t[1]*x**2 + t[2]/x + t[3]
     def loss(t):
         return np.sum((fun(in_x, t) - out_true) ** 2)
@@ -1154,7 +1127,7 @@ def custom_PnP(keypoints: [(normalised_px_w, normalised_px_h)], bounding_box) ->
     dist = 1.82951011e+03*mpropx + 2.78068401e+01*mpropx**2 + 3.42363868e-04/mpropx + 6.50204337e-02
     w = posw-0.5*sizew+sizew*np.average(np.array([keypoints[i][0] for i in range(7)]))  # avg width position of pixels
     #angle = 1.02105188*w - -0.97115736  # parameters using pos and bearing from drone image (camara seems to be rotated by -24.78 degree and has a field of view of 63 degree)
-    angle = 1.88694861*w - 0.56362367*w**2 + 0.02771185/w - 1.29870971
+    angle = 1.88694861*w - 0.56362367*w**2 + 0.02771185/w - 1.29870971  # w in range(0, 1). w=0 := cone is at the left border of image, w=1 := cone is at right border of image.
     # angle = 0 -> in front of car.
     # anlge < 0 -> left of car.
     return dist, angle
@@ -1171,7 +1144,7 @@ def get_path(data: SensorDataDict):
     if all([len(t) == 0 for t in [xx, yx]]):
         print("cant visualise all 0 path of TODO")
         return
-    #timesteps, xp, yp = timesinc(xx, xd, yx, yd)  # TODO maybe instead of reast of function
+    #timesteps, (xp, yp) = multi_timesinc([(xx, xd), (yx, yd)])  # TODO maybe instead of rest of function
     #return timesteps, xp, yp
     if any([a != b for (a, b) in zip(xx, yx)]):
         print("times of xd and yd different, do timesinc")
@@ -1415,6 +1388,7 @@ def print_synced_pos_bearing_from_drone_and_sensors():
 
 
 def visual_pipeline(cam="camL3", framenr=2632, car_bearing=0.0, car_pos: (gps_util.meter_north, gps_util.meter_east)=(0,0)) -> ([(gps_util.meter_north, gps_util.meter_east)], [(gps_util.meter_north, gps_util.meter_east)]):
+    #detections:[(cone_bounding_box, cone_keypoitns, poii_id)] = get_boundingboxes_keypoints_poii(cam, framenr)
     bounding_boxes = get_boundingboxes(cam, framenr)  # TODO replace with call to yolov5 NN
     if len(bounding_boxes) == 0:
         print(f"visual_pipeline: no cone detected in {cam}_frame_{framenr}")
@@ -1547,22 +1521,31 @@ class trackingSLAM(SLAM):
 
 
     def measurment(self, blue_cones_meterpos, yellow_cones_meterpos, car_mpos):
+        #print(f"trackingSLAM.measurment(seeing_cones={self.seeing_cones}, bc_mp={blue_cones_meterpos}, yc_mp={yellow_cones_meterpos}, car_mp={car_mpos})")
         self.bc += list(blue_cones_meterpos)
         self.yc += list(yellow_cones_meterpos)
         self.cp = car_mpos
+        first_error = True
         for (cls, conepos) in [(0, bc) for bc in blue_cones_meterpos]+[(1, yc) for yc in yellow_cones_meterpos]:
             f = True
             for sc in self.seeing_cones:
-                if sc[0] == cls and (conepos[0]-sc[1][-1][0])**2 + (conepos[1]-sc[1][-1][1])**2 < 1:  #  same color and less then 1 meter appart -> same cone
-                    if sc[2]:
-                        print("error: sc = ", sc)
-                    sc[1].append(conepos)
-                    sc[2] = True
+                (sc_color, sc_positions, sc_added) = sc
+                if sc_color == cls and (conepos[0]-sc_positions[-1][0])**2 + (conepos[1]-sc_positions[-1][1])**2 < 1:  #  same color and less then 1 meter appart -> same cone
+                    if sc_added and first_error:
+                        print("\n")
+                        first_error = False
+                    if sc_added:
+                        print("error: sc = ", (sc_color, sc_positions, sc_added))
+                    sc_positions.append(conepos)
+                    sc[2] = True  # sc_added = True has no effect.
                     f = False
                     break
             if f:
+                # (cls, conepos) could be added to any existing cone -> must be new cone
                 self.seeing_cones.append([cls, [conepos], True])
-        [self.seen_cones.append((sc[0], (np.average([lat for (lat, long) in sc[1]]), np.average([long for (lat, long) in sc[1]])))) for sc in self.seeing_cones if not sc[2] and len(sc[1]) > 3]
+        #print(f"trackingSLAM.measurment: self.seen_cones = {self.seen_cones}")
+        [self.seen_cones.append((sc_color, (np.average([m_north for (m_north, m_east) in sc_positions]), np.average([m_east for (m_north, m_east) in sc_positions])))) for (sc_color, sc_positions, sc_added) in self.seeing_cones if not sc_added and len(sc_positions) > 3]
+        #print(f"trackingSLAM.measurment: self.seen_cones = {self.seen_cones}")
         self.seeing_cones = [sc for sc in self.seeing_cones if sc[2]]
         self.seeing_cones = [[cls, t, False] for (cls, t, _) in self.seeing_cones]
     def get_map(self) -> (gps_util.meter_pos, [gps_util.meter_pos], [gps_util.meter_pos]):
@@ -1588,36 +1571,35 @@ def test_Slam():
     poi_true_gpspos, carpos = true_pos_from_droneimg_pxpos()  # true_pos_from_droneimg_pxpos("C:/Users/Idefix/PycharmProjects/datasets/keypoints/droneview_annotations.csv")
     # carpos[frnr] = [np.array([lat, long]), np.array([lat, long]), np.array([lat, long]), np.array([lat, long])
 
-    tdiff_dronesensor = 25.75  # framenumber_of_droneview3/25+tdiff_dronesensor = time of gps mesurment
-    t_carpos = [(frnr/25+tdiff_dronesensor, carpos[frnr]) for frnr in carpos.keys()]
+    t_carpos = [(drone2t(frnr), np.array(carpos[frnr])) for frnr in carpos.keys()]
     t_carpos.sort(key=lambda x: x[0])
-
+    carpos_dv_time = [time for (time, value) in t_carpos]
+    carpos_dv_value = [value for (time, value) in t_carpos]
     base_gpspos = (gps_lat_y[0], gps_long_y[0])
-    tdiff_caml3sensor = 56.8
     all_blue_cones = []
     all_yellow_cones = []
     print("gps_lat_x = ", min(gps_lat_x), ", ", max(gps_lat_x))
     print("gps_long_x = ", min(gps_long_x), ", ", max(gps_long_x))
-    print(f"visual_pipeline from (framenr, time) (1282, {1282/20+tdiff_caml3sensor}) to (2643, {2643/20+tdiff_caml3sensor})")
+    print(f"visual_pipeline from (framenr, time) (1282, {camL2t(1282)}) to (2643, {camL2t(2643)})")
     car_pos = []
 
     use_gpspos = False
     noslam = trackingSLAM()
-    for frnr in range(1282, 2643, 5):  # frnr of camL3
-        t = frnr/20+tdiff_caml3sensor
+    for frnr in range(1282, 2643):  # frnr of camL3
+        t = camL2t(frnr)
         if use_gpspos:
             t_long, i_long = get_at_time(x=gps_long_x, y=gps_long_y, t=t)
             t_lat = gps_lat_y[i_long]
             t_head = gps_heading_y[i_long]
             car_gps_pos = (t_lat, t_long)
         else:
-            carposes, _ = get_at_time(x=[t for (t, car_gps_pos) in t_carpos], y=[np.array(car_gps_pos) for (t, car_gps_pos) in t_carpos], t=t)
+            carposes, _ = get_at_time(x=carpos_dv_time, y=carpos_dv_value, t=t)
             car_gps_pos = carposes[3]
             t_head = gps_util.carposs_to_heading(carposes)
         car_mpos = gps_util.gps_to_meter(car_gps_pos, base_gpspos)
         #car_mpos += gps_util.distazimuth_to_meter(1, car_bearing)  # TODOconvert base_gpspos from rear right wheel to center of car
         blue_cones_meterpos, yellow_cones_meterpos = visual_pipeline(cam="camL3", framenr=frnr, car_pos=car_mpos, car_bearing=t_head)
-
+        #print(f"camL3_frnr={frnr}, bc_mp={blue_cones_meterpos}, yc_mp={yellow_cones_meterpos}")
         noslam.measurment(blue_cones_meterpos, yellow_cones_meterpos, car_mpos)
 
         car_pos.append(car_mpos)
@@ -1659,13 +1641,18 @@ def test_Slam():
 
 
 def get_true_carstate():
-    sdd = read_csv("merged_rundata_csv/alldata_2022_12_17-14_43_59_id3.csv")
+    visout_praefix = "tcs_"
     #relevant_keys = ["BMS_SOC_UsbFlRec", "Converter_L_N_actual_UsbFlRec", "Converter_R_N_actual_UsbFlRec",
     #"Converter_L_RPM_Actual_Filtered_UsbFlRec", "Converter_R_RPM_Actual_Filtered_UsbFlRec",
     #"Converter_L_Torque_Out_UsbFlRec", "Converter_R_Torque_Out_UsbFlRec",
     # "ECU_ACC_X_UsbFlRec", "ECU_ACC_Y_UsbFlRec", "ECU_ACC_Z_UsbFlRec",
     # "GNSS_heading_UsbFlRec", "GNSS_latitude_UsbFlRec", "GNSS_longitude_UsbFlRec", "GNSS_speed_over_ground_UsbFlRec",
     # "SWS_angle_UsbFlRec"]
+
+    # [|syncd_][vabs|aabs|heading|yawrate]_[gnss|dv|imu]_[time|value]
+
+    # read sensor data
+    sdd = read_csv("merged_rundata_csv/alldata_2022_12_17-14_43_59_id3.csv")
     vabs_gnss_time = sdd["GNSS_speed_over_ground_UsbFlRec"+x_ending]
     vabs_gnss_value = sdd["GNSS_speed_over_ground_UsbFlRec"]
     heading_gnss_time = sdd["GNSS_heading_UsbFlRec"+x_ending]
@@ -1682,18 +1669,36 @@ def get_true_carstate():
     # get absolute velocity from droneview carpositions
     carposkeys = list(carpos.keys())
     carposkeys.sort()
-    abs_v_droneview_time = [0.0 for _ in range(len(carposkeys))]
-    abs_v_droneview_value = [0.0 for _ in range(len(carposkeys))]
-    abs_v_droneview_time[0] = t2ssdt(drone2t(carposkeys[0]))-0.001
-    for i in range(1, len(carposkeys), 1):
-        t0 = t2ssdt(drone2t(carposkeys[i-1]))
-        t1 = t2ssdt(drone2t(carposkeys[i]))
-        abs_v_droneview_time[i] = 0.5*t0+0.5*t1
-        abs_v_droneview_value[i] = gps_util.gps_to_dist(gps_util.average(carpos[carposkeys[i-1]]), gps_util.average(carpos[carposkeys[i]]))/(t1-t0)
-    print("abs_v_droneview_time =", abs_v_droneview_time[:10])
-    print("abs_v_droneview_value =", abs_v_droneview_value[:10])
-    vabs_time, sincd_vabs_droneview_value, sincd_vabs_gps_value = timesinc(abs_v_droneview_time, abs_v_droneview_value, vabs_gnss_time, vabs_gnss_value)
-    plot_and_save("vabs from gps and drone", x_in=vabs_time, ys=[smothing(vabs_time, sincd_vabs_droneview_value, 0.5), sincd_vabs_gps_value], names=["droneview", "gps"])
+    vabs_dv_time = [0.0 for _ in range(len(carposkeys))]
+    vabs_dv_value = [0.0 for _ in range(len(carposkeys))]
+    vabs_dv_time[0] = t2ssdt(drone2t(carposkeys[0]))-0.001
+    for i in range(len(carposkeys)-1):
+        t0 = t2ssdt(drone2t(carposkeys[i]))
+        t1 = t2ssdt(drone2t(carposkeys[i+1]))
+        vabs_dv_time[i] = 0.5*t0+0.5*t1
+        vabs_dv_value[i] = gps_util.gps_to_dist(gps_util.average(carpos[carposkeys[i-1]]), gps_util.average(carpos[carposkeys[i]]))/(t1-t0)
+    vabs_dv_value[0], vabs_dv_value[-1] = (0, 0)
+    vabs_time, (sincd_vabs_dv_value, sincd_vabs_gps_value) = multi_timesinc([(vabs_dv_time, vabs_dv_value), (vabs_gnss_time, vabs_gnss_value)])
+    plot_and_save(visout_praefix+"vabs from gps and drone", x_in=vabs_time, ys=[smothing(vabs_time, sincd_vabs_dv_value, 0.5), sincd_vabs_gps_value], names=["droneview", "gps"])
+
+
+
+    # derivitate of zip(gnss_vabs_time, gnss_vabs_value)
+    smothed_gpsv = smothing(time=vabs_gnss_time, values=vabs_gnss_value, t=1)
+    ax_gnss_time = np.array([(0.5*vabs_gnss_time[i+1]+0.5*vabs_gnss_time[i]) for i in range(len(smothed_gpsv)-1)])
+    ax_gnss_value = [(vabs_gnss_value[i+1]-vabs_gnss_value[i])/(vabs_gnss_time[i+1]-vabs_gnss_time[i]) for i in range(len(vabs_gnss_value)-1)]
+    ax_gnss_value[0], ax_gnss_value[-1] = (0, 0)
+    #vabs_dv_smothed_value = smothing(vabs_dv_time, smothing(vabs_dv_time, vabs_dv_value, 5), 5)
+    #aabs_dv_time = np.array([0.5*vabs_dv_time[i]+0.5*vabs_dv_time[i+1] for i in range(len(vabs_dv_time)-1)])
+    #aabs_dv_value = np.array([(vabs_dv_smothed_value[i+1]-vabs_dv_smothed_value[i])/(vabs_dv_time[i+1]-vabs_dv_time[i]) for i in range(len(vabs_dv_value)-1)])
+    #aabs_dv_value[0], aabs_dv_value[-1] = (0, 0)
+    imu_ax_value_meadian = np.median(ax_imu_value)
+    imu_ay_value_meadian = np.median(ay_imu_value)
+    imu_az_value_meadian = np.median(az_imu_value)
+    imu_aabs_value = [np.sqrt((ax_imu_value[i]-imu_ax_value_meadian)**2+(ay_imu_value[i]-imu_ay_value_meadian)**2+(az_imu_value[i]-imu_az_value_meadian)**2) for i in range(len(ax_imu_time))]
+    imu_aabs_value = smothing(ax_imu_time, imu_aabs_value, 3)
+    syncd_ax_time, (synced_imu_aabs_vale, synced_aabs_gnss_value) = multi_timesinc([(ax_imu_time, imu_aabs_value), (ax_gnss_time, ax_gnss_value)])  # (aabs_dv_time, aabs_dv_value)
+    plot_and_save(visout_praefix+"aabs from gnss and imu", x_in=syncd_ax_time, ys=[synced_imu_aabs_vale, smothing(syncd_ax_time, synced_aabs_gnss_value, 1)], names=["aabs_imu", "aabs_gnss"], avgs=False)
 
     # get heading from droneview carpositions
     heading_droneview_time = [0.0 for _ in range(len(carposkeys))]
@@ -1701,67 +1706,46 @@ def get_true_carstate():
     for i in range(len(carposkeys)):
         heading_droneview_time[i] = t2ssdt(drone2t(carposkeys[i]))
         heading_droneview_value[i] = gps_util.carposs_to_heading(carpos[carposkeys[i]])
-    heading_time, sincd_heading_droneview_value, sincd_heading_gps_value = timesinc(heading_droneview_time, heading_droneview_value, heading_gnss_time, heading_gnss_value)
-    plot_and_save("heading from gps and drone", x_in=heading_time, ys=[sincd_heading_droneview_value, np.array([to_range(x) for x in sincd_heading_gps_value])], names=["droneview", "gps"], avgs=False)
-
-    # derivitate of zip(gnss_vabs_time, gnss_vabs_value)
-    smothed_gpsv = smothing(time=vabs_gnss_time, values=vabs_gnss_value, t=1)
-    ax_time = np.array([(0.5*vabs_gnss_time[i+1]+0.5*vabs_gnss_time[i]) for i in range(len(smothed_gpsv)-1)])
-    ax_gnss_value = [(vabs_gnss_value[i+1]-vabs_gnss_value[i])/(vabs_gnss_time[i+1]-vabs_gnss_time[i]) for i in range(len(vabs_gnss_value)-1)]
-    imu_ax_value_meadian = np.median(ax_imu_value)
-    imu_ay_value_meadian = np.median(ay_imu_value)
-    imu_az_value_meadian = np.median(az_imu_value)
-    imu_aabs_value = [np.sqrt((ax_imu_value[i]-imu_ax_value_meadian)**2+(ay_imu_value[i]-imu_ay_value_meadian)**2+(az_imu_value[i]-imu_az_value_meadian)**2) for i in range(len(ax_imu_time))]
-    imu_aabs_value = smothing(ax_imu_time, imu_aabs_value, 3)
-    syncd_ax_time, synced_imu_aabs_vale, synced_aabs_gnss_value = timesinc(ax_imu_time, imu_aabs_value, ax_time, ax_gnss_value)
-    plot_and_save("aabs from gnss_vabs", x_in=ax_time, ys=[smothing(ax_time, ax_gnss_value, 3), synced_imu_aabs_vale], names=["aabs_gnss_value", "aabs_imu_value"], avgs=False)
+    heading_time, (sincd_heading_droneview_value, sincd_heading_gps_value) = multi_timesinc([(heading_droneview_time, heading_droneview_value), (heading_gnss_time, heading_gnss_value)])
+    plot_and_save(visout_praefix+"heading from gps and drone", x_in=heading_time, ys=[sincd_heading_droneview_value, np.array([to_range(x) for x in sincd_heading_gps_value])], names=["droneview", "gps"], avgs=False)
 
     # derivitate of zip(gnss_heading_time, gnss_heading_value)
     smothed_gps_heading = smothing(time=heading_gnss_time, values=heading_gnss_value, t=1)
-    yawrate_time = [(0.5*heading_gnss_time[i+1]+0.5*heading_gnss_time[i]) for i in range(len(smothed_gps_heading)-1)]
-    yawrate_gps_value = [(smothed_gps_heading[i+1]-smothed_gps_heading[i])/(heading_gnss_time[i+1]-heading_gnss_time[i]) for i in range(len(heading_gnss_time)-1)]
+    yawrate_gnss_time = [(0.5*heading_gnss_time[i+1]+0.5*heading_gnss_time[i]) for i in range(len(smothed_gps_heading)-1)]
+    yawrate_gnss_value = [(smothed_gps_heading[i+1]-smothed_gps_heading[i])/(heading_gnss_time[i+1]-heading_gnss_time[i]) for i in range(len(heading_gnss_time)-1)]
     smothed_dv_heading = smothing(heading_droneview_time, heading_droneview_value, t=1)
+    yawrate_dv_time = [(0.5*heading_droneview_time[i+1]+0.5*heading_droneview_time[i]) for i in range(len(heading_droneview_time)-1)]
     yawrate_dv_value = [(smothed_dv_heading[i+1]-smothed_dv_heading[i])/(heading_droneview_time[i+1]-heading_droneview_time[i]) for i in range(len(heading_droneview_time)-1)]
-    plot_and_save("yawrate", x_in=yawrate_time, ys=[yawrate_gps_value, yawrate_dv_value], names=["yawrate_value", "yawrate_dv_value"], avgs=False)
+    syncd_yawrate_time, (syncd_yawrate_gnss_value, syncd_yawrate_dv_value) = multi_timesinc([(yawrate_gnss_time, yawrate_gnss_value), (yawrate_dv_time, yawrate_dv_value)])
+    plot_and_save(visout_praefix+"yawrate", x_in=syncd_yawrate_time, ys=[syncd_yawrate_gnss_value, syncd_yawrate_dv_value], names=["yawrate_value", "yawrate_dv_value"], avgs=False)
 
-    true_v_value = smothing(vabs_gnss_time, vabs_gnss_value, 0.5)
-    true_v_time = vabs_gnss_time
-    true_ax_value = smothing(ax_time, ax_gnss_value, 3)
-    true_ax_time = ax_time
     for k in ["Converter_L_Torque_Out_UsbFlRec", "Converter_R_Torque_Out_UsbFlRec"]:
         k_name = k_to_name(k)
         print(f"\nname = {k_name}\n")
+        for (name, data_time, data_value) in [("vx", vabs_gnss_time, smothing(vabs_gnss_time, vabs_gnss_value, 0.5)), ("aabs_imu", ax_imu_time, imu_aabs_value), ("der(vabs_gnss)", ax_gnss_time, smothing(ax_gnss_time, ax_gnss_value, 3))]:
+            time, (syncd_data_value, synced_k_value) = multi_timesinc([(data_time, data_value), (sdd[k+x_ending], sdd[k])])
 
-        k_time = sdd[k+x_ending]
-        time, syncd_true_v_value, kv = timesinc(true_v_time, true_v_value, k_time, smothing(k_time, sdd[k], 5))
-        offset = syncd_true_v_value[0]-kv[0]
-        fac = np.sum(syncd_true_v_value-offset)/np.sum(kv)
-        #fun, parameters = fit_poly_fun_and_print(fac*kv+offset, tv, f"{k} to v", exponents=[0, 1])
-        fig, axe = plt.subplots()
-        axe.set_title(f"fit linear from {k_name} to vx")
-        axe.plot(time, syncd_true_v_value, label="true_vabs")
-        #axe.plot(time, np.array([fun(x, parameters) for x in kv]), label="fun(kv)")
-        axe.plot(time, fac*kv+offset, label=f"{fac:.2E}*{k_name}+{offset:.2E}")
-        axe.legend()
-        axe.grid()
-        fig.show()
+            offset = syncd_data_value[0]-synced_k_value[0]
+            fac = np.sum(syncd_data_value-offset)/np.sum(synced_k_value)
+            print("fit_lina.parameters =", [offset, fac])
+            fun, parameters = fit_poly_fun_and_print(synced_k_value, syncd_data_value, f"{k} to v", exponents=[0, 1])
+            print("fit_poly.parameters =", parameters)
 
-        time, syncd_true_ax_value, ka = timesinc(true_ax_time, true_ax_value, sdd[k+x_ending], smothing(k_time, sdd[k], 5))
-        offset = syncd_true_ax_value[0]-ka[0]
-        fac = np.sum(syncd_true_ax_value-offset)/np.sum(ka)
-        #fun, parameters = fit_poly_fun_and_print(ka, ta, f"{k} to ax", exponents=[0, 1])
-        fig, axe = plt.subplots()
-        axe.set_title(f"fit linear from {k_name} to ax")
-        axe.plot(time, syncd_true_ax_value, label="true_aabs")
-        axe.plot(time, fac*ka+offset, label=f"{fac:.2E}*{k_name}+{offset:.2E}")
-        #axe.plot(time, np.array([fun(x, parameters) for x in ka]), label="fun(ka)")
-        axe.legend()
-        axe.grid()
-        fig.show()
+            fig, axe = plt.subplots()
+            axe.set_title(f"fit linear from {k_name} to {name}")
+            axe.plot(time, syncd_data_value, label=name)
+            #axe.plot(time, np.array([fun(x, parameters) for x in kv]), label="fun(kv)")
+            est_data_value = fun(sdd[k], parameters)
+            axe.plot(sdd[k+x_ending], smothing(sdd[k+x_ending], est_data_value, 1), label=f"{parameters[1]:.2E}*{k_name}+{parameters[0]:.2E}")
+            #axe.plot(time, fac*synced_k_value+offset, label=f"{fac:.2E}*{k_name}+{offset:.2E}")
+            axe.legend()
+            axe.grid()
+            fig.show()
 
 
 def main():
-    get_true_carstate()
+    test_Slam()
+    #get_true_carstate()
 
 
 if __name__ == "__main__":
@@ -1778,7 +1762,7 @@ def all_functions():
     remove_zeros()
     to_range()
     get_at_time()
-    timesinc()
+    multi_timesinc()
     fit_poly_fun_and_print()
     avg_pxprom_from_conekeypoints()
     timestr2datetime()

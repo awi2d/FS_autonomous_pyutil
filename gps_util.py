@@ -6,8 +6,8 @@ import warnings
 heading_radiants = float  # https://en.wikipedia.org/wiki/Azimuth
 # gps_to_azimuth(a, b) = 0 = 0*pi: a is North of b
 # gps_to_azimuth(a, b) = pi/2 = 1.57079: a is East of b
-# pi = 3.1415 = South
-# -pi/2 = -1.57079 = West
+# gps_to_azimuth(a, b) = pi = 3.1415: a is South of b
+# gps_to_azimuth(a, b) = -pi/2 = -1.57079: a is  West of b
 meter = float
 meter_north = float
 meter_east = float
@@ -35,11 +35,13 @@ def degree_to_radiants(gps: gps_pos_degree) -> gps_pos_radiant:
 
 def carposs_to_heading(carposes: [gps_pos_degree]) -> heading_radiants:
     # gps = [Left front wheel gps-position in degree, Right front wheel, Left rear wheel, Right rear wheel]
-    # 0: front axis is norht of rear axis
+    # 0: front axis is north of rear axis
     # 0.5*pi: front axis is east of rear axis
     if all([carposes[0][i]+carposes[1][i] == carposes[2][i]+carposes[3][i] for i in [0, 1]]):
         warnings.warn(f"gps_util.carposs_to_heading: avg(carposes[0]={carposes[0]}, carposes[1]={carposes[1]}) and avg(carpoeses[2]={carposes[2]}, carpoese[3]={carposes[3]}) = {0.5*np.array(carposes[0])+0.5*np.array(carposes[1])} are identical, heading not defined")
     return gps_to_azimuth(0.5*np.array(carposes[0])+0.5*np.array(carposes[1]), 0.5*np.array(carposes[2])+0.5*np.array(carposes[3]))
+def average(poses: [gps_pos_degree]) -> gps_pos_degree:
+    return (np.average([lat for (lat, long) in poses]), np.average([long for (lat, long) in poses]))
 
 
 def _gps_to_distazimuth(gps: gps_pos_radiant, gps_base: gps_pos_radiant) -> (meter, heading_radiants):
