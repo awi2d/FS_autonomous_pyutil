@@ -444,9 +444,18 @@ def vidoe2frames(video_path, frames_dir):
 
 
 if __name__ == "__main__":
-    #/cones/camL3_frame_2642.jpg_cone_8.jpg  # old
-    #/droneview/camL3_camL3_frame_1280.jpg_cone_0.jpg  # new
-    #f"/cones/{cam}_frame_{framenr}.jpg_cone_{cone}.jpg"  # correct
+    frames_dir = "C:/Users/Idefix/PycharmProjects/datasets/testrun_2022_12_17/cam_footage/right_cam_14_46_00/"
+    output_dir = "C:/Users/Idefix/PycharmProjects/OpenLabeling/main/input/"
+    som_frame = 1225
+    eom_frame = 2586
+    for img_file in os.listdir(frames_dir):
+        #img_file = "camR3_frame_{frnr}.jpg"
+        frnr = int(img_file.replace(".jpg", "").replace("camR3_frame_", ""))
+        if som_frame <= frnr <=eom_frame:
+            img = cv2.imread(frames_dir+img_file)
+            img = np.rot90(img, 2)
+            cv2.imwrite(output_dir+img_file, img)
+    exit(0)
     lines = []
     with open("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cone_annotations.csv", 'r') as f:
         lines = f.readlines()

@@ -80,10 +80,13 @@ def k_to_name(k) -> str:
     return str(k).replace("Converter_", "").replace("_UsbFlRec", "").replace("_actual", "").replace("_Actual", "").replace("_Filtered", "")
 
 
-drone_som_frame = {0:2075, 3:2360}
+drone_som_frame = {0:2075, 3:2340}
 camL_som_frame = {0:2610, 3:1281}
 camR_som_frame = {0:2508, 3:1225}
-ssd_som_seconds = {0:54, 3:118}
+ssd_som_seconds = {0:54, 3:118}  # lat and long would be syncd between gnss and droneimage if ssd_som_seconds[3] = 120
+# drone: drone_frnr
+# camL: caml_frnr
+# t: time since start of moving (som)
 def drone2t(drone_frnr: drone_frnr, runid=3) -> som_time_seconds:
     return (drone_frnr - drone_som_frame[runid]) / 25
 def t2drone(t: som_time_seconds, runid=3) -> drone_frnr:
@@ -98,6 +101,35 @@ def t2ssdt(t: som_time_seconds, runid=3) -> seconds:
     return t+ssd_som_seconds[runid]
 def abs_value(l):
     return np.sqrt(np.sum([t**2 for t in l]))
+
+
+drone3_frame = int
+def get_synced_frame(camL3_frame) -> drone3_frame:
+    camL3_starttime = datetime.datetime.strptime("2022-12-17 14:44:56.48", "%Y-%m-%d %H:%M:%S.%f")
+    drone3_starttime = datetime.datetime.strptime("2022-12-17 14:44:26.92", "%Y-%m-%d %H:%M:%S.%f")
+    return round(25*(camL3_starttime+datetime.timedelta(seconds=camL3_frame/20)-drone3_starttime).total_seconds())
+
+
+def print_synced_frame(camL3_frame):
+    camL3_starttime = datetime.datetime.strptime("2022-12-17 14:44:56.48", "%Y-%m-%d %H:%M:%S.%f")
+    camL3_somframe = 1281
+    camL3_eomframe = 2643
+    drone3_starttime = datetime.datetime.strptime("2022-12-17 14:44:26.92", "%Y-%m-%d %H:%M:%S.%f")
+    drone3_somframe = 2360
+    drone3_eomframe = 4039
+    # camL3_starttime+camL3_frame/20 == drone3_starttime+drone3_frame/25
+    # drone3_fram = 25*(camL3_starttime+camL3_frame/20-drone3_starttime)
+    from_starttime = 25*(camL3_starttime+datetime.timedelta(seconds=camL3_frame/20)-drone3_starttime).total_seconds()
+    from_som = drone3_somframe + 25*(camL3_frame-camL3_somframe)/20
+    from_eom = drone3_eomframe - 25*(camL3_eomframe-camL3_frame)/20
+    print(f"\ndrone3 start from from camL3_frame={camL3_frame}")
+    print("time = ", camL3_starttime+datetime.timedelta(seconds=camL3_frame/20))
+    print("from starttime: ", from_starttime)
+    print("from som: ", from_som)
+    print("from eom: ", from_eom)
+    l = [from_starttime, from_som, from_eom]
+    print("avg: ", np.average(l))
+    print("meadian: ", sorted(l)[1])
 
 
 def remove_zeros(x, y, zero=0):
@@ -195,12 +227,12 @@ def fit_poly_fun_and_print(in_x, out_true, name, exponents=[-1, 0, 1, 2]):
             parameters = res.x
         else:
             raise Exception("could not succesfully fit data from", in_x, "to", out_true)
-    est_angle = fun(in_x, parameters)
+    est_value = fun(in_x, parameters)
     print(f"{name}.est_from ", in_x)
-    print(f"{name}.fun(est_from) = ", est_angle)
+    print(f"{name}.fun(est_from) = ", est_value)
     print(f"{name}.out_true  = ", out_true)
     print(f"parameters[{name}] = {parameters}")
-    print(f"diff_{name} = {np.sqrt(np.sum((est_angle-out_true)**2))}\n")
+    print(f"diff_{name} = {np.sqrt(np.sum((est_value-out_true)**2))/len(in_x)}\n")
     return fun, parameters
 
 
@@ -223,15 +255,7 @@ def avg_pxprom_from_conekeypoints(keypoints: [(normalised_px_w, normalised_px_h)
     imgsize_h, imgsize_w = (1200, 1920)
     #keypoints_pxpos_in_camImage_from_relativepxpos_in_coneimg = np.array([((posw-0.5*sizew+w*sizew)*imgsize_w, (posh-0.5*sizeh+h*sizeh)*imgsize_h) for (w, h) in keypoints])
     keypoints = np.array([(w*sizew*imgsize_w, h*sizeh*imgsize_h) for (w, h) in keypoints])  # transform keypoints from relative position in coneimage to relative position in camera image (as only differences between keypoints are observed, the offset can be ignored)
-    #avg = 0
-    meadian = []
-    indexe = [(i, j) for i in range(6) for j in range(i+1, 7)]
-    for (i, j) in indexe:
-        # avg += meter dist between points on real cone / pixel dist between points on cone image
-        #avg += obj_Distm[(i, j)]/abs_value(keypoints[i]-keypoints[j])
-        meadian.append(obj_Distm[(i, j)]/abs_value(keypoints[i]-keypoints[j]))
-    #r = avg/len(indexe)
-    r = np.median(meadian)
+    r = float(np.median([obj_Distm[(i, j)]/abs_value(keypoints[i]-keypoints[j]) for i in range(6) for j in range(i+1, 7)]))
     # distance to object [m] = real object size(m) * focal length (mm) / object height in frame (mm)
     #  with object height in frame (mm) = sensor height (mm) * object height (px) / sensor height (px)
     # distance to object [m] = real object size(m)/ object height (px) * constant
@@ -256,7 +280,21 @@ def plot_colorgradientline(name: str, lat_pos: [gps_util.lattitude], long_pos: [
     points = np.array([long_pos, lat_pos]).T.reshape(-1, 1, 2)
     segments = np.concatenate([points[:-1], points[1:]], axis=1)
     lc = matplotlib.collections.LineCollection(segments, array=np.linspace(0, 1, len(lat_pos)), cmap=cmap, norm=plt.Normalize(0.0, 1.0), linewidth=2, alpha=1)
-    ax0.add_collection(lc)
+    ax0.add_collection(lc, label="gnss positions")
+
+    # plot cones
+    poi_true_gpspos, carpos = true_pos_from_droneimg_pxpos()
+    for ycp in poi_true_gpspos[poii_yellowcones_range[0]:poii_yellowcones_range[1]]:
+        ax0.scatter(ycp[1], ycp[0], c="yellow")
+    for bcp in poi_true_gpspos[poii_bluecones_range[0]:poii_bluecones_range[1]]:
+        ax0.scatter(bcp[1], bcp[0], c="blue")
+
+    # plot carpos (car positions from drone view)
+    carposkeys = list(carpos.keys())
+    carposkeys.sort()
+    carpos_time = [t2ssdt(drone2t(carposkeys[i]))+2 for i in range(len(carposkeys))]
+    carpos_val = [carpos[k][3] for k in carposkeys]
+    ax0.plot([long for (lat, long) in carpos_val], [lat for (lat, long) in carpos_val], color=(0, 0, 0), label="true_position")
 
     # add time to points on path
     if time is not None:
@@ -272,18 +310,6 @@ def plot_colorgradientline(name: str, lat_pos: [gps_util.lattitude], long_pos: [
     ax0.set_title(f"Path of {name}")
     ax0.scatter(long_pos, lat_pos, s=10, c=cmap(np.linspace(0, 1, len(lat_pos))), alpha=0.5)
 
-    # plot cones
-    poi_true_gpspos, carpos = true_pos_from_droneimg_pxpos()
-    for ycp in poi_true_gpspos[poii_yellowcones_range[0]:poii_yellowcones_range[1]]:
-        ax0.scatter(ycp[1], ycp[0], c="yellow")
-    for bcp in poi_true_gpspos[poii_bluecones_range[0]:poii_bluecones_range[1]]:
-        ax0.scatter(bcp[1], bcp[0], c="blue")
-
-    # plot carpos (car positions from drone view)
-    for k in carpos.keys():
-        for i in range(len(carpos[k])):
-            ax0.scatter(carpos[k][i][1], carpos[k][i][0], s=5, color=cmap((k/25+27.92)/max(time)), alpha=1)
-
     # add labels and meter scaling on both axies  # TODO meter labels on axis may be inaccurate, use gps_utils
     #lat_pos, long_pos = gps2meter(lat_pos, long_pos, lat_pos[0], long_pos[0])
     tmp = 111320 * np.cos(np.average(lat_pos) * np.pi / 180)
@@ -298,6 +324,7 @@ def plot_colorgradientline(name: str, lat_pos: [gps_util.lattitude], long_pos: [
     ax0.set_xlabel("Longitude")
     ax0.set_ylabel("Lattitude")
     ax0.grid()
+    ax0.legend()
     fig.savefig(vis_out_path / f"{name}__path.png")
     plt.show()
 
@@ -542,9 +569,10 @@ def write_csv(filename: os.path, data: SensorDataDict):
 
 def visualise_data(data: SensorDataDict) -> plot:
     assert_SensorDataDict_is_valid(data)
-    name = data[startTimestamp_key].strftime(time_format_str)
-    print("\nvisualise data ", name)
+    ssd_name = data[startTimestamp_key].strftime(time_format_str)
+    print("\nvisualise data ", ssd_name)
     keys_where_zero_is_nan = ["BMS_SOC_UsbFlRec", "GNSS_latitude_UsbFlRec", "GNSS_longitude_UsbFlRec"]
+    show_avgs = {"GNSS_speed_over_ground_UsbFlRec", "Converter_L_N_actual_UsbFlRec", "Converter_R_N_actual_UsbFlRec", "Converter_L_Torque_Out_UsbFlRec", "Converter_R_Torque_Out_UsbFlRec"}
     print("empty keys =", [key for key in relevant_keys if
                                not str(key) == startTimestamp_key and not str(key) == length_key and len(
                                    data[key]) == 0])
@@ -583,29 +611,28 @@ def visualise_data(data: SensorDataDict) -> plot:
     for i, k in enumerate(relevant_keys):
         print("")
         if k in cam_keys:
-            print("unreachable code was reached")
-            continue
-        if len(data[k]) == 0:
+            print(f"{k} is in cam_keys={cam_keys}, but should only be in relevant_keys={relevant_keys}")
+        elif len(data[k]) == 0:
             print(f"{k} is empty")
         else:
             min_elem = min(data[k])
             max_elem = max(data[k])
             if min_elem == max_elem:
-                print(f"{k} is constantly {min_elem} for {len(data[k])} elements")
+                print(f"{k} is constantly {min_elem} for all {len(data[k])} elements")
             else:
                 tmp = [t for t in data[k] if t != 0]
                 print(f"k = {k}, type(data[k]) = {getType(data[k])}")
-                print(
-                    f"{k}: ({len(data[k])} elements) on average = {sum(data[k]) / len(data[k])}, nonzero_average = {sum(tmp) / len(tmp)}, (min, max) = ({min_elem}, {max_elem})")
+                print(f"{k}: {getType(data[k])}\non average = {np.average(data[k])}, nonzero_average = {np.average(tmp)}, (min, max) = ({min_elem}, {max_elem})")
                 # plot
                 x, y = data[k + x_ending], data[k]
                 if k in keys_where_zero_is_nan:
                     x, y = remove_zeros(x, y)  # might be unnesary cause of outlier filtering in plot_and_save
-                plot_and_save(str(k), x, [y], f"vis_out/{name}__{str(k)}.png")
+                plot_name = k_to_name(k)
+                plot_and_save(plot_name, x, [y], f"vis_out/{ssd_name}__{plot_name}.png", avgs=k not in show_avgs)
 
     # show gnss path
-    timesteps, xp, yp = get_path(data)
-    plot_colorgradientline(name, xp, yp, time=timesteps)
+    timesteps, (lat_val, long_val) = multi_timesinc([(data["GNSS_latitude_UsbFlRec"+x_ending], data["GNSS_latitude_UsbFlRec"]), (data["GNSS_longitude_UsbFlRec"+x_ending], data["GNSS_longitude_UsbFlRec"])])
+    plot_colorgradientline(ssd_name, lat_val, long_val, time=timesteps)
     plt.show()
 
 
@@ -776,7 +803,7 @@ def averegae_diff(data: SensorDataDict, k0, k1, nonzero_treshhold=(1, 1), quoten
         print(f"averegae_diff: \n# {k0_name} / {k1_name} = {k01}\n# {k1_name} / {k0_name} = {k10}")
 
 
-def true_pos_from_droneimg_pxpos(point_file=None) -> ([gps_util.gps_pos_radiant], [gps_util.gps_pos_radiant], [gps_util.gps_pos_radiant], {int: [gps_util.gps_pos_radiant]}):
+def true_pos_from_droneimg_pxpos(point_file=None) -> ([gps_util.gps_pos_radiant], {drone_frnr: [(gps_util.gps_pos_radiant, gps_util.gps_pos_radiant, gps_util.gps_pos_radiant, gps_util.gps_pos_radiant)]}):
     #poi_true_gps_positions_radiants, carpos = true_pos_from_droneimg_pxpos()
     #point_file = "C:/Users/Idefix/PycharmProjects/datasets/keypoints/droneview_annotations.csv"
     gully_u_gmpos = np.array(gps_util.degree_to_radiants((51.4641141, 6.7389449)))
@@ -988,18 +1015,22 @@ def custom_pnp_find_parameters():
     all_estfrom_dist = []
     all_true_angle = []
     all_estfrom_angle = []
-    bbi_poii_label_dir = "C:/Users/Idefix/PycharmProjects/datasets/testrun_2022_12_17/bbi_poii/"
-    image_frnr = [int(str(f).replace(".txt", "").split("_")[-1]) for f in os.listdir(bbi_poii_label_dir)]
+    bbi_poii_label_dir = "C:/Users/Idefix/PycharmProjects/tmpProject/vp_labels/bbi_poii"
+    fully_labeld_frames = [int(str(f).replace(".txt", "").split("_")[-1]) for f in os.listdir(bbi_poii_label_dir)]
     poi_true_gpspos, carpos = true_pos_from_droneimg_pxpos()
-    print("image_frnr = ", [(camL3_frnr, get_synced_frame(camL3_frnr)) for camL3_frnr in image_frnr])
-    for camL3_frnr in image_frnr:
+    print("image_frnr = ", [(camL3_frnr, get_synced_frame(camL3_frnr)) for camL3_frnr in fully_labeld_frames])
+    carpos_time = list(carpos.keys())
+    carpos_time.sort()
+    carpos_time = np.array(carpos_time)
+    carpos_value = np.array([carpos[drone3_frnr] for drone3_frnr in carpos_time])
+    for camL3_frnr in fully_labeld_frames:
         drone3_frnr = get_synced_frame(camL3_frnr)
         print("(camL3_frnr, drone3_frnr) =", (camL3_frnr, drone3_frnr))
         # load data from files
-        car_gpsposes = carpos[drone3_frnr]
+        car_gpsposes, _ = get_at_time(carpos_time, carpos_value, drone3_frnr)
         name = f"drone3frame_{drone3_frnr}_camL3_{camL3_frnr}"
         bb_kp_poii = get_boundingboxes_keypoints_poii("camL3", camL3_frnr)
-        bb_kp_poii = [(bb, kp, poii) for (bb, kp, poii) in bb_kp_poii if kp is not None]
+        bb_kp_poii = [(bb, kp, poii) for (bb, kp, poii) in bb_kp_poii if kp is not None and poii != -1]
 
         # car_gpspos and _bearing from drone image:
         car_gpspos = car_gpsposes[3]  # gps is about at location of rear right wheel
@@ -1037,24 +1068,54 @@ def custom_pnp_find_parameters():
 
     all_true_dist = np.array(all_true_dist)
     all_estfrom_dist = np.array(all_estfrom_dist)
-    fit_poly_fun_and_print(in_x=all_estfrom_dist, out_true=all_true_dist, name="dist_total", exponents=[0, 1, 2])
-    # parameters[dist_total] = [-1.90217367e+03  3.05375783e+05 -9.73326783e-03  1.12787139e+01]
-    # diff_dist_total =  1.0695141605801541
-
+    fun, parameters = fit_poly_fun_and_print(in_x=all_estfrom_dist, out_true=all_true_dist, name="dist_total", exponents=[0, 1])
+    fig, axe = plt.subplots()
+    axe.set_title(f"customPnP dist fit to. ({len(all_estfrom_dist)} values from {len(fully_labeld_frames)} frames)")
+    axe.set_xlabel("median(dist on physical cone [m] / dist in image [px]) for all cone_keypoints pairs")
+    axe.set_ylabel("true dist(car, con) [m]")
+    axe.scatter(all_estfrom_dist, all_true_dist, s=1)
+    all_estfrom_dist.sort()
+    axe.plot(all_estfrom_dist, np.array([fun(efd, parameters) for efd in all_estfrom_dist]), label=f"{parameters[1]:.3E}*est_from+{parameters[0]:.3E}", color="red")
+    axe.grid()
+    axe.legend()
+    fig.savefig(vis_out_path/"pnp_dist_fit")
+    fig.show()
+    # parameters[dist_total] = [1.03694031e+00 1.69160357e+03]  # average
+    # diff_dist_total = 0.03767625078303172
+    # parameters[dist_total] = [2.04826435e-01 1.81102254e+03]  # median
+    # diff_dist_total = 0.01701737260345642
     all_true_angle = np.array(all_true_angle)
     all_estfrom_angle = np.array(all_estfrom_angle)
-    fit_poly_fun_and_print(in_x=all_estfrom_angle, out_true=all_true_angle, name="bearing_total", exponents=[0, 1, 2])
-    # parameters[bearing_total] = [ 0.96307476 -0.10296335 -0.00138886 -0.76054734]
-    # diff_bearing_total =  0.0662130889486984
+    fun, parameters = fit_poly_fun_and_print(in_x=all_estfrom_angle, out_true=all_true_angle, name="bearing_total", exponents=[0, 1])
+    fig, axe = plt.subplots()
+    axe.set_title(f"customPnP heading fit to. ({len(all_estfrom_angle)} values from {len(fully_labeld_frames)} frames)")
+    axe.set_xlabel("average(width_position of cone_keypoints in image) [px]")
+    axe.set_ylabel("true heading from car to cone [rad]")
+    axe.scatter(all_estfrom_angle, all_true_angle, s=1)
+    axe.plot(all_estfrom_angle, np.array([fun(efa, parameters) for efa in all_estfrom_angle]), label=f"{parameters[1]:.3E}*est_from+{parameters[0]:.3E}", color="red")
+    axe.grid()
+    axe.legend()
+    fig.savefig(vis_out_path/"pnp_heading_fit")
+    fig.show()
+    # parameters[bearing_total] = [-1.00448915  1.12712196]  # average
+    # diff_bearing_total = 0.000993987008819239
+    # parameters[bearing_total] = [-1.00109719  1.12032384]  # median
+    # diff_bearing_total = 0.0009948634495913714
 
 
 def custom_pnp_validate():
-    labeld_frames = [(2632, 4029), (2032, 3279), (1282, 2341), (1287, 2348), (1292, 2354), (1297, 2360), (1302, 2366), (1307, 2373)]  # (camL3_framnr, drone3_framenr)]
+    bbi_poii_label_dir = "C:/Users/Idefix/PycharmProjects/tmpProject/vp_labels/bbi_poii"
+    fully_labeld_frames = [int(str(f).replace(".txt", "").split("_")[-1]) for f in os.listdir(bbi_poii_label_dir)]
     cls_est_true_pos = []
     poi_true_gpspos, dronefrmrn_carposes = true_pos_from_droneimg_pxpos()
+    carpos_time = list(dronefrmrn_carposes.keys())
+    carpos_time.sort()
+    carpos_time = np.array(carpos_time)
+    carpos_value = np.array([dronefrmrn_carposes[drone3_frnr] for drone3_frnr in carpos_time])
     new_cetp_startindex = 0
-    for (camL3_framenr, drone3_framenr) in labeld_frames:
-        car_poses = dronefrmrn_carposes[drone3_framenr]
+    for camL3_framenr in fully_labeld_frames:
+        drone3_framenr = get_synced_frame(camL3_framenr)
+        car_poses, _ = get_at_time(carpos_time, carpos_value, drone3_framenr)
         gps_base = car_poses[3]
         car_posm = (0, 0)  # gps_util.gps_to_meter(dronefrmrn_carposes[drone3_framenr][3], gps_base)
 
@@ -1068,7 +1129,7 @@ def custom_pnp_validate():
         for i, bb in enumerate(bounding_boxes):
             keypoints = get_cone_keypoints("camL3", camL3_framenr, i)
             poii = get_poii("camL3", camL3_framenr, i)
-            if keypoints is not None:
+            if keypoints is not None and poii != -1:
                 dist, heading = custom_PnP(keypoints, bb)
                 #heading = bearing_from_gps_points(cone_gpspos, car_gpspos)-car_bearing
                 #print(f"{i}: cone {bb[0]} detected at (dist={dist}, heading={heading}")
@@ -1078,56 +1139,62 @@ def custom_pnp_validate():
                 cls_est_true_pos += [(bb[0], est_pos, true_pos)]  # (cls, est_pos, true_pos)
 
         # plot estimated cone positions and true cone positions in same image
-        fig, (axe) = plt.subplots(1)
-        axe.set_title(f"true_conepos-est_conepos of camL3 frame {camL3_framenr}")
-        axe.set_xlabel("meter east")
-        axe.set_xlabel("meter north")
-        axe.grid()
-    # >
-        # plot all true cone positions
-        # true positions x, estimated position o, unseen cones black, seen cones blue/yellow
-        tmp = [gps_util.gps_to_meter(yc, gps_base=gps_base) for yc in poi_true_gpspos[poii_yellowcones_range[0]:poii_yellowcones_range[1]] if gps_util.gps_to_dist(yc, gps_base) < 20]
-        axe.scatter(x=[t[1] for t in tmp], y=[t[0] for t in tmp], c="black", marker='x', label="true_pos_yellow_unseen")
-        tmp = [gps_util.gps_to_meter(bc, gps_base=gps_base) for bc in poi_true_gpspos[poii_bluecones_range[0]:poii_bluecones_range[1]] if gps_util.gps_to_dist(bc, gps_base) < 20]
-        axe.scatter(x=[t[1] for t in tmp], y=[t[0] for t in tmp], c="black", marker='x', label="true_pos_blue_unseen")
-        # plot vision cone
-        car_poses_m = [gps_util.gps_to_meter(cp, gps_base) for cp in [car_poses[0], car_poses[1], car_poses[3], car_poses[2], car_poses[0], 0.5*np.array(car_poses[0])+0.5*np.array(car_poses[1]), 0.5*np.array(car_poses[2])+0.5*np.array(car_poses[3])]]
-        axe.plot([t[1] for t in car_poses_m], [t[0] for t in car_poses_m], color="red")
-        for (cls, est_pos, true_pos) in cls_est_true_pos[new_cetp_startindex:]:
-            color = "blue" if cls==0 else "yellow"
-            axe.scatter(x=[est_pos[1]], y=[est_pos[0]], c=color, marker='o', label="true_pos_seen")
-            axe.scatter(x=[true_pos[1]], y=[true_pos[0]], c=color, marker='x', label="est_pos")
-            axe.plot([est_pos[1], true_pos[1]], [est_pos[0], true_pos[0]], color=color)
-            axe.text(x=0.5*est_pos[1]+0.5*true_pos[1], y=0.5*est_pos[0]+0.5*true_pos[0], s=f"{gps_util.meter_meter_to_dist(true_pos, est_pos)}"[:4])
-        #axe.legend()
-        fig.savefig(vis_out_path / f"true_est_conepos_camL3_frame_{camL3_framenr}.png")
-        fig.show()
+    # end visual pipeline modified>
+        number_of_visible_cones = len(cls_est_true_pos)-new_cetp_startindex
+        if camL3_framenr in [1282]:  # number_of_visible_cones > 15
+            print("plot true_conepos-est_conepos of camL3frame", camL3_framenr)
+            fig, axe = plt.subplots()
+            axe.set_title(f"true_conepos-est_conepos of camL3 frame {camL3_framenr}")
+            axe.set_xlabel("meter east")
+            axe.set_ylabel("meter north")
+            axe.grid()
+            # plot all true cone positions
+            # true positions x, estimated position o, unseen cones black, seen cones blue/yellow
+            tmp = [gps_util.gps_to_meter(yc, gps_base=gps_base) for yc in poi_true_gpspos[poii_yellowcones_range[0]:poii_yellowcones_range[1]] if gps_util.gps_to_dist(yc, gps_base) < 30]
+            axe.scatter(x=[t[1] for t in tmp], y=[t[0] for t in tmp], c="black", marker='x', label="true_pos_yellow_unseen")
+            tmp = [gps_util.gps_to_meter(bc, gps_base=gps_base) for bc in poi_true_gpspos[poii_bluecones_range[0]:poii_bluecones_range[1]] if gps_util.gps_to_dist(bc, gps_base) < 30]
+            axe.scatter(x=[t[1] for t in tmp], y=[t[0] for t in tmp], c="black", marker='x', label="true_pos_blue_unseen")
+            # plot vision cone
+            car_posm = gps_util.gps_to_meter(gps_util.average(car_poses), gps_base)
+            car_heading = gps_util.carposs_to_heading(car_poses)
+            vision_rays = [car_posm+20*np.array([np.cos(car_heading-1), np.sin(car_heading-1)]), car_posm, car_posm+20*np.array([np.cos(car_heading+0.15), np.sin(car_heading+0.15)])]
+            axe.plot([t[1] for t in vision_rays], [t[0] for t in vision_rays], color="red")
+            vision_rays = [car_posm+20*np.array([np.cos(car_heading-0.15), np.sin(car_heading-0.15)]), car_posm, car_posm+20*np.array([np.cos(car_heading+1), np.sin(car_heading+1)])]
+            axe.plot([t[1] for t in vision_rays], [t[0] for t in vision_rays], color="green")
+            car_poses_m = [gps_util.gps_to_meter(cp, gps_base) for cp in [car_poses[0], car_poses[1], car_poses[3], car_poses[2], car_poses[0], 0.5*np.array(car_poses[0])+0.5*np.array(car_poses[1]), 0.5*np.array(car_poses[2])+0.5*np.array(car_poses[3])]]
+            axe.plot([t[1] for t in car_poses_m], [t[0] for t in car_poses_m], color="black")
+            for (cls, est_pos, true_pos) in cls_est_true_pos[new_cetp_startindex:]:
+                color = "blue" if cls==0 else "yellow"
+                axe.scatter(x=[est_pos[1]], y=[est_pos[0]], c=color, marker='o', label="true_pos_seen")
+                axe.scatter(x=[true_pos[1]], y=[true_pos[0]], c=color, marker='x', label="est_pos")
+                axe.plot([est_pos[1], true_pos[1]], [est_pos[0], true_pos[0]], color=color)
+                axe.text(x=0.5*est_pos[1]+0.5*true_pos[1], y=0.5*est_pos[0]+0.5*true_pos[0], s=f"{gps_util.meter_meter_to_dist(true_pos, est_pos)}"[:4])
+            #axe.legend()
+            fig.savefig(vis_out_path / f"true_est_conepos_camL3_frame_{camL3_framenr}.png")
+            fig.show()
         new_cetp_startindex = len(cls_est_true_pos)
 
     # plot (distance between detected cone and true cone position) against true distance
-    fig, (axe) = plt.subplots(1)
-    axe.set_title(f"accuracy of visual pipeline over distance ({len(cls_est_true_pos)} datapoints from {len(labeld_frames)} frames")
-    axe.scatter(x=[gps_util.meter_to_dist(true_pos) for (cls, est_pos, true_pos) in cls_est_true_pos], y=[gps_util.meter_to_dist(est_pos-true_pos) for (cls, est_pos, true_pos) in cls_est_true_pos], c=["blue" if cls==0 else "yellow" for (cls, est_pos, true_pos) in cls_est_true_pos])
+    fig, axe = plt.subplots()
+    axe.set_title(f"accuracy of visual pipeline over distance ({len(cls_est_true_pos)} datapoints from {len(fully_labeld_frames)} frames)")
+    axe.scatter(x=[gps_util.meter_to_dist(true_pos) for (cls, est_pos, true_pos) in cls_est_true_pos], y=[gps_util.meter_to_dist(est_pos-true_pos) for (cls, est_pos, true_pos) in cls_est_true_pos], c=["blue" if cls==0 else "yellow" for (cls, est_pos, true_pos) in cls_est_true_pos], s=1)
     axe.set_xlabel("dist(car, true_cone_pos)")
-    axe.set_ylabel("dist(estimated_cone_pos, true_cone_pos")
+    axe.set_ylabel("dist(estimated_cone_pos, true_cone_pos)")
     axe.grid()
     fig.savefig(vis_out_path / "visual_pipeline_accuracy.png")
     fig.show()
 
 
 def custom_PnP(keypoints: [(normalised_px_w, normalised_px_h)], bounding_box) -> (gps_util.meter, gps_util.heading_radiants):
-    # custom_pnp_get_parameters: linear+-1 function, meadian
-    #  parameters[dist_total] = [1.82951011e+03 2.78068401e+01 3.42363868e-04 6.50204337e-02]
-    #  diff_dist_total =  5.572888817075419
-    #  parameters[bearing_total] = [ 1.88694861 -0.56362367  0.02771185 -1.29870971]
-    #  diff_bearing_total =  0.4052837611048084
     cls, posw, posh, sizew, sizeh = bounding_box
+
     mpropx = avg_pxprom_from_conekeypoints(keypoints=keypoints, bounding_box=bounding_box)  # avg of (meter dist on object / pixel dist in image)
-    #dist = 1.86613152e+03*mpropx + 9.63512329e-02  # parameters using pos and bearing from drone image
-    dist = 1.82951011e+03*mpropx + 2.78068401e+01*mpropx**2 + 3.42363868e-04/mpropx + 6.50204337e-02
+    # parameters[dist_total] = [2.04826435e-01 1.81102254e+03]
+    dist = 2.04826435e-01 + 1.81102254e+03*mpropx
+
+    # parameters[bearing_total] = [-1.00448915  1.12712196]
     w = posw-0.5*sizew+sizew*np.average(np.array([keypoints[i][0] for i in range(7)]))  # avg width position of pixels
-    #angle = 1.02105188*w - -0.97115736  # parameters using pos and bearing from drone image (camara seems to be rotated by -24.78 degree and has a field of view of 63 degree)
-    angle = 1.88694861*w - 0.56362367*w**2 + 0.02771185/w - 1.29870971  # w in range(0, 1). w=0 := cone is at the left border of image, w=1 := cone is at right border of image.
+    angle = -1.00448915 + 1.12712196*w
     # angle = 0 -> in front of car.
     # anlge < 0 -> left of car.
     return dist, angle
@@ -1340,52 +1407,6 @@ def show_sensorlogs():
 # GNSS_speed_over_ground / R_N = 0.006502402469364128
 # R_N / GNSS_speed_over_ground = 153.78931167554344
 
-drone3_frame = int
-def get_synced_frame(camL3_frame) -> drone3_frame:
-    camL3_starttime = datetime.datetime.strptime("2022-12-17 14:44:56.48", "%Y-%m-%d %H:%M:%S.%f")
-    drone3_starttime = datetime.datetime.strptime("2022-12-17 14:44:26.92", "%Y-%m-%d %H:%M:%S.%f")
-    return round(25*(camL3_starttime+datetime.timedelta(seconds=camL3_frame/20)-drone3_starttime).total_seconds())
-
-
-def print_synced_frame(camL3_frame):
-    camL3_starttime = datetime.datetime.strptime("2022-12-17 14:44:56.48", "%Y-%m-%d %H:%M:%S.%f")
-    camL3_somframe = 1281
-    camL3_eomframe = 2643
-    drone3_starttime = datetime.datetime.strptime("2022-12-17 14:44:26.92", "%Y-%m-%d %H:%M:%S.%f")
-    drone3_somframe = 2360
-    drone3_eomframe = 4039
-    # camL3_starttime+camL3_frame/20 == drone3_starttime+drone3_frame/25
-    # drone3_fram = 25*(camL3_starttime+camL3_frame/20-drone3_starttime)
-    from_starttime = 25*(camL3_starttime+datetime.timedelta(seconds=camL3_frame/20)-drone3_starttime).total_seconds()
-    from_som = drone3_somframe + 25*(camL3_frame-camL3_somframe)/20
-    from_eom = drone3_eomframe - 25*(camL3_eomframe-camL3_frame)/20
-    print(f"\ndrone3 start from from camL3_frame={camL3_frame}")
-    print("time = ", camL3_starttime+datetime.timedelta(seconds=camL3_frame/20))
-    print("from starttime: ", from_starttime)
-    print("from som: ", from_som)
-    print("from eom: ", from_eom)
-    l = [from_starttime, from_som, from_eom]
-    print("avg: ", np.average(l))
-    print("meadian: ", sorted(l)[1])
-
-
-def print_synced_pos_bearing_from_drone_and_sensors():
-    poi_true_gpspos, carpos = true_pos_from_droneimg_pxpos()
-    sensor_data = read_csv(csv_files_dir / "alldata_2022_12_17-14_43_59_id3.csv")
-    td = 27.92  # seconds that sensor_data started recording before drone3
-    for k in carpos.keys():
-        #"GNSS_heading_UsbFlRec", "GNSS_latitude_UsbFlRec", "GNSS_longitude_UsbFlRec"
-        gps_heading, i = get_at_time(sensor_data["GNSS_heading_UsbFlRec"+x_ending], sensor_data["GNSS_heading_UsbFlRec"], k/25+td)
-        droneview_heading = gps_util.carposs_to_heading(carpos[k])
-        print(f"gps_heading.at({k/25+td}={i}) = {gps_heading} = {(droneview_heading+np.pi)*180/np.pi} = bearing[{k}]")
-    for k in carpos.keys():
-        gps_lat, i = get_at_time(sensor_data["GNSS_latitude_UsbFlRec"+x_ending], sensor_data["GNSS_latitude_UsbFlRec"], k/25+td)
-        gps_long = sensor_data["GNSS_longitude_UsbFlRec"][i]  # should be the same as line below
-        #gps_long, i = get_at_time(sensor_data["GNSS_longitude_UsbFlRec"+x_ending], sensor_data["GNSS_longitude_UsbFlRec"], k/25+td)
-        carposition = (np.average([lat for (lat, lon) in carpos[k]]), np.average([lon for (lat, lon) in carpos[k]]))
-        #print(f"sensor_data.gps[{k/25+td}] = {(gps_lat, gps_long)}, \tcarpos[k] = {carposition}")
-        print(f"abs meter diff between sensor_data.gps[{k/25+td}] and carpos[{k}] = ", gps_util.gps_to_dist((gps_lat, gps_long), carposition))
-
 
 def visual_pipeline(cam="camL3", framenr=2632, car_bearing=0.0, car_pos: (gps_util.meter_north, gps_util.meter_east)=(0,0)) -> ([(gps_util.meter_north, gps_util.meter_east)], [(gps_util.meter_north, gps_util.meter_east)]):
     #detections:[(cone_bounding_box, cone_keypoitns, poii_id)] = get_boundingboxes_keypoints_poii(cam, framenr)
@@ -1424,81 +1445,6 @@ def get_nearst_gpspoint(gps_lat: [gps_util.lattitude], gps_long: [gps_util.longi
     return min_i, min_dist
 
 
-def plot_gps_vs_droneview():
-    sensordatadict = read_csv("merged_rundata_csv/alldata_2022_12_17-14_43_59_id3.csv")
-    gps_lat_x = sensordatadict["GNSS_latitude_UsbFlRec"+x_ending]
-    gps_lat_y = sensordatadict["GNSS_latitude_UsbFlRec"]*np.pi/180
-    gps_long_x = sensordatadict["GNSS_longitude_UsbFlRec"+x_ending]
-    gps_long_y = sensordatadict["GNSS_longitude_UsbFlRec"]*np.pi/180
-    gps_heading_x = sensordatadict["GNSS_heading_UsbFlRec"+x_ending]
-    gps_heading_y = sensordatadict["GNSS_heading_UsbFlRec"]*np.pi/180
-    start_of_moving_index_gps = 0
-    while gps_lat_x[start_of_moving_index_gps] < 120:
-        start_of_moving_index_gps += 1
-    print("start_of_moving_index_gps =", start_of_moving_index_gps)
-
-    #plot_cones(car_pos=[gps_util.degree_to_radiants(cp) for cp in carpos], yellow_cones=gps_pos_optimised[poii_yelowcones_range[0]:], blue_cones=gps_pos_optimised[9:47], name="true_gps_pos", blue_cones_labes=[str(i) for i in range(9, 47)], yellow_cones_labes=[str(i) for i in range(47, 88)])
-    #custom_pnp_find_parameters()
-    poi_true_gpspos, carpos = true_pos_from_droneimg_pxpos()  # true_pos_from_droneimg_pxpos("C:/Users/Idefix/PycharmProjects/datasets/keypoints/droneview_annotations.csv")
-    # carpos[frnr] = [np.array([lat, long]), np.array([lat, long]), np.array([lat, long]), np.array([lat, long])
-
-    tdiff_dronesensor = 26.5  # framenumber_of_droneview3/25+tdiff = time of gps mesurment
-    t_carpos = [(frnr/25+tdiff_dronesensor, carpos[frnr]) for frnr in carpos.keys()]
-    t_carpos.sort(key=lambda x: x[0])
-    print(f"t_carpos: from (framenr, t) {(min(carpos.keys()), t_carpos[0][0])} to {(max(carpos.keys()), t_carpos[-1][0])}")
-    t = np.array([t for (t, y) in t_carpos])
-
-    # plot path of all wheels from droneview and carpos from gps
-    fig, (axe) = plt.subplots(1)
-    axe.set_title("path of all wheels")
-    name = ["FL", "FR", "RL", "RR"]
-    for i in [0, 1, 2, 3]:
-        axe.plot(np.array([y[i][1] for (t, y) in t_carpos]), np.array([y[i][0] for (t, y) in t_carpos]), label=f"carpos_{name[i]}")
-    axe.plot(gps_long_y[start_of_moving_index_gps:], gps_lat_y[start_of_moving_index_gps:], label="gps_carpos")
-    blue_cone_gpspos = poi_true_gpspos[poii_bluecones_range[0]:poii_bluecones_range[1]]
-    yellow_cone_gpspos = poi_true_gpspos[poii_yellowcones_range[0]:poii_yellowcones_range[1]]
-    axe.scatter(np.array([long for (lat, long) in blue_cone_gpspos]), np.array([lat for (lat, long) in blue_cone_gpspos]), color="blue")
-    axe.scatter(np.array([long for (lat, long) in yellow_cone_gpspos]), np.array([lat for (lat, long) in yellow_cone_gpspos]), color="yellow")
-    axe.legend()
-    axe.grid()
-    fig.show()
-
-    # plot lattiutude and longitude from gps and droneview.RR against each other.
-    name = ["lattitude", "longitude"]
-    for i in [0, 1]:
-        fig, (axe) = plt.subplots(1)
-        axe.set_title(name[i])
-        axe.plot(t, np.array([y[3][i] for (t, y) in t_carpos]), label="car_pos_rearright_long")
-        if i == 0:
-            axe.plot(gps_lat_x[start_of_moving_index_gps:], gps_lat_y[start_of_moving_index_gps:], label="gps_lat")
-        else:
-            axe.plot(gps_long_x[start_of_moving_index_gps:], gps_long_y[start_of_moving_index_gps:], label="gps_long")
-        axe.legend()
-        axe.grid()
-        fig.show()
-
-    # plot heading from gps and droneview against each other
-    fig, (axe) = plt.subplots(1)
-    axe.set_title("heading")
-    axe.plot([t for (t, pos) in t_carpos], [gps_util.gps_to_azimuth(0.5*pos[0]+0.5*pos[1], 0.5*pos[2]+0.5*pos[3]) for (t, pos) in t_carpos], label="heading from drone")
-    axe.plot(gps_heading_x[start_of_moving_index_gps:], gps_heading_y[start_of_moving_index_gps:], label="heading from gps")
-    axe.legend()
-    axe.grid()
-    fig.show()
-
-    # plot dist between droneview.RR and gps
-    fig, (axe) = plt.subplots(1)
-    axe.set_title(f"dist(gps_pos, drone_pos/25+{tdiff_dronesensor}")
-    tmp = []
-    for (t, pos) in t_carpos:
-        t_lat, i_lat = get_at_time(x=gps_lat_x, y=gps_lat_y, t=t)
-        t_long = gps_long_y[i_lat]
-        tmp.append((t, gps_util.gps_to_dist(pos[3], (t_lat, t_long))))
-    axe.plot([t for (t, d) in tmp], [d for (t, d) in tmp])
-    axe.grid()
-    fig.show()
-
-
 class SLAM():
     def measurment(self, blue_cones_meterpos, yellow_cones_meterpos, car_mpos):
         # blue and yellow_cones_meterpos = output of visual pipeline.
@@ -1513,7 +1459,7 @@ class SLAM():
 
 class trackingSLAM(SLAM):
     def __init__(self):
-        self.bc = []
+        self.bc = []  # [(accuracy-score, (meter_north, meter_est))], with accuracy-score=1: positionis perfect, accuracy-score=0: contains no informatin
         self.yc = []
         self.cp = (0, 0)
         self.seeing_cones = []  # (color:int, [meterpos], added:bool)
@@ -1522,47 +1468,68 @@ class trackingSLAM(SLAM):
 
     def measurment(self, blue_cones_meterpos, yellow_cones_meterpos, car_mpos):
         #print(f"trackingSLAM.measurment(seeing_cones={self.seeing_cones}, bc_mp={blue_cones_meterpos}, yc_mp={yellow_cones_meterpos}, car_mp={car_mpos})")
-        self.bc += list(blue_cones_meterpos)
-        self.yc += list(yellow_cones_meterpos)
+        self.bc += [(1.01-gps_util.meter_meter_to_dist(bcm, car_mpos)/10, bcm) for bcm in blue_cones_meterpos]
+        self.yc += [(1.01-gps_util.meter_meter_to_dist(ycm, car_mpos)/10, ycm) for ycm in yellow_cones_meterpos]
         self.cp = car_mpos
-        first_error = True
-        for (cls, conepos) in [(0, bc) for bc in blue_cones_meterpos]+[(1, yc) for yc in yellow_cones_meterpos]:
-            f = True
-            for sc in self.seeing_cones:
-                (sc_color, sc_positions, sc_added) = sc
-                if sc_color == cls and (conepos[0]-sc_positions[-1][0])**2 + (conepos[1]-sc_positions[-1][1])**2 < 1:  #  same color and less then 1 meter appart -> same cone
-                    if sc_added and first_error:
-                        print("\n")
-                        first_error = False
-                    if sc_added:
-                        print("error: sc = ", (sc_color, sc_positions, sc_added))
-                    sc_positions.append(conepos)
-                    sc[2] = True  # sc_added = True has no effect.
-                    f = False
-                    break
-            if f:
-                # (cls, conepos) could be added to any existing cone -> must be new cone
-                self.seeing_cones.append([cls, [conepos], True])
-        #print(f"trackingSLAM.measurment: self.seen_cones = {self.seen_cones}")
-        [self.seen_cones.append((sc_color, (np.average([m_north for (m_north, m_east) in sc_positions]), np.average([m_east for (m_north, m_east) in sc_positions])))) for (sc_color, sc_positions, sc_added) in self.seeing_cones if not sc_added and len(sc_positions) > 3]
-        #print(f"trackingSLAM.measurment: self.seen_cones = {self.seen_cones}")
-        self.seeing_cones = [sc for sc in self.seeing_cones if sc[2]]
-        self.seeing_cones = [[cls, t, False] for (cls, t, _) in self.seeing_cones]
+        #first_error = True
+        #for (cls, conepos) in [(0, bc) for bc in blue_cones_meterpos]+[(1, yc) for yc in yellow_cones_meterpos]:
+        #    f = True
+        #    for sc in self.seeing_cones:
+        #        (sc_color, sc_positions, sc_added) = sc
+        #        if sc_color == cls and (conepos[0]-sc_positions[-1][0])**2 + (conepos[1]-sc_positions[-1][1])**2 < 1:  #  same color and less then 1 meter appart -> same cone
+        #            if sc_added and first_error:
+        #                print("\n")
+        #                first_error = False
+        #            if sc_added:
+        #                print("error: sc = ", (sc_color, sc_positions, sc_added))
+        #            sc_positions.append(conepos)
+        #            sc[2] = True  # sc_added = True has no effect.
+        #            f = False
+        #            break
+        #    if f:
+        #        # (cls, conepos) could be added to any existing cone -> must be new cone
+        #        self.seeing_cones.append([cls, [conepos], True])
+        ##print(f"trackingSLAM.measurment: self.seen_cones = {self.seen_cones}")
+        #[self.seen_cones.append((sc_color, (np.average([m_north for (m_north, m_east) in sc_positions]), np.average([m_east for (m_north, m_east) in sc_positions])))) for (sc_color, sc_positions, sc_added) in self.seeing_cones if not sc_added and len(sc_positions) > 3]
+        ##print(f"trackingSLAM.measurment: self.seen_cones = {self.seen_cones}")
+        #self.seeing_cones = [sc for sc in self.seeing_cones if sc[2]]
+        #self.seeing_cones = [[cls, t, False] for (cls, t, _) in self.seeing_cones]
     def get_map(self) -> (gps_util.meter_pos, [gps_util.meter_pos], [gps_util.meter_pos]):
         # return (car position, map), as list of all cones in meterpos
-        return self.cp, [conepos for (cls, conepos) in self.seen_cones if cls == 0], [conepos for (cls, conepos) in self.seen_cones if cls == 1]
+        cones_clusteredpos = [[], []]
+        for (i, cone_mespos) in enumerate([self.bc, self.yc]):
+            all_acc_sum = []
+            cone_acc_mpos = [(acc, pos) for (acc, pos) in cone_mespos if acc > 0]
+            while len(cone_acc_mpos) > 0:
+                has_changed = True
+                bc_current = cone_acc_mpos[0][1]
+                while has_changed:
+                    cluster = [(acc, bc) for (acc, bc) in cone_acc_mpos if acc > 0 and gps_util.meter_meter_to_dist(bc, bc_current) <= 1]
+                    if len(cluster) == 0:
+                        print(f"trackingSLAM.get_map: waring: unreachable code reached.\n cluster={cluster}\nbc_current={bc_current}\ncone_acc_mpos={cone_acc_mpos}")
+                    acc_sum = sum([acc for (acc, bc) in cluster])
+                    tmp = np.array([0, 0])+sum([acc*np.array(bc)/acc_sum for (acc, bc) in cluster])  # weighted average of cone positions
+                    has_changed = (tmp[0] != bc_current[0] and tmp[1] != bc_current[1])
+                    bc_current = tmp
+                cone_acc_mpos = [(acc, bc) for (acc, bc) in cone_acc_mpos if gps_util.meter_meter_to_dist(bc, bc_current) > 1]
+                if acc_sum > 1:  # somewhere between 0.7 and 17 should be okay, but highly depends on framerate, visual detection range abd formula for accuracy.
+                    cones_clusteredpos[i].append(bc_current)
+            all_acc_sum.sort()
+        #return self.cp, [conepos for (cls, conepos) in self.seen_cones if cls == 0], [conepos for (cls, conepos) in self.seen_cones if cls == 1]
+
+        return self.cp, cones_clusteredpos[0], cones_clusteredpos[1]
 
 
 def test_Slam():
     sensordatadict = read_csv("merged_rundata_csv/alldata_2022_12_17-14_43_59_id3.csv")
-    gps_lat_x = sensordatadict["GNSS_latitude_UsbFlRec"+x_ending]
-    gps_lat_y = sensordatadict["GNSS_latitude_UsbFlRec"]*np.pi/180
-    gps_long_x = sensordatadict["GNSS_longitude_UsbFlRec"+x_ending]
-    gps_long_y = sensordatadict["GNSS_longitude_UsbFlRec"]*np.pi/180
-    gps_heading_x = sensordatadict["GNSS_heading_UsbFlRec"+x_ending]
-    gps_heading_y = sensordatadict["GNSS_heading_UsbFlRec"]*np.pi/180
+    gps_lat_time = sensordatadict["GNSS_latitude_UsbFlRec"+x_ending]
+    gps_lat_val = sensordatadict["GNSS_latitude_UsbFlRec"]*np.pi/180
+    gps_long_time = sensordatadict["GNSS_longitude_UsbFlRec"+x_ending]
+    gps_long_val = sensordatadict["GNSS_longitude_UsbFlRec"]*np.pi/180
+    gps_heading_time = sensordatadict["GNSS_heading_UsbFlRec"+x_ending]
+    gps_heading_val = sensordatadict["GNSS_heading_UsbFlRec"]*np.pi/180
     start_of_moving_index_gps = 0
-    while gps_lat_x[start_of_moving_index_gps] < 120:
+    while gps_lat_time[start_of_moving_index_gps] < 120:
         start_of_moving_index_gps += 1
     print("start_of_moving_index_gps =", start_of_moving_index_gps)
 
@@ -1571,74 +1538,108 @@ def test_Slam():
     poi_true_gpspos, carpos = true_pos_from_droneimg_pxpos()  # true_pos_from_droneimg_pxpos("C:/Users/Idefix/PycharmProjects/datasets/keypoints/droneview_annotations.csv")
     # carpos[frnr] = [np.array([lat, long]), np.array([lat, long]), np.array([lat, long]), np.array([lat, long])
 
-    t_carpos = [(drone2t(frnr), np.array(carpos[frnr])) for frnr in carpos.keys()]
-    t_carpos.sort(key=lambda x: x[0])
-    carpos_dv_time = [time for (time, value) in t_carpos]
-    carpos_dv_value = [value for (time, value) in t_carpos]
-    base_gpspos = (gps_lat_y[0], gps_long_y[0])
-    all_blue_cones = []
-    all_yellow_cones = []
-    print("gps_lat_x = ", min(gps_lat_x), ", ", max(gps_lat_x))
-    print("gps_long_x = ", min(gps_long_x), ", ", max(gps_long_x))
-    print(f"visual_pipeline from (framenr, time) (1282, {camL2t(1282)}) to (2643, {camL2t(2643)})")
+    dronefrnr_carpos = [(frnr, np.array(carpos[frnr])) for frnr in carpos.keys()]
+    dronefrnr_carpos.sort(key=lambda x: x[0])
+    carpos_dv_time = [time for (time, value) in dronefrnr_carpos]
+    carpos_dv_value = [value for (time, value) in dronefrnr_carpos]
+    base_gpspos = (gps_lat_val[0], gps_long_val[0])
+
+    print("gps_lat_time = ", min(gps_lat_time), ", ", max(gps_lat_time))
+    print("gps_long_time = ", min(gps_long_time), ", ", max(gps_long_time))
+    print(f"test SLAM with camL3-images from (framenr, time) (1282, {camL2t(1282)}) to (2643, {camL2t(2643)})")
     car_pos = []
-
     use_gpspos = False
-    noslam = trackingSLAM()
-    for frnr in range(1282, 2643):  # frnr of camL3
-        t = camL2t(frnr)
-        if use_gpspos:
-            t_long, i_long = get_at_time(x=gps_long_x, y=gps_long_y, t=t)
-            t_lat = gps_lat_y[i_long]
-            t_head = gps_heading_y[i_long]
-            car_gps_pos = (t_lat, t_long)
-        else:
-            carposes, _ = get_at_time(x=carpos_dv_time, y=carpos_dv_value, t=t)
-            car_gps_pos = carposes[3]
-            t_head = gps_util.carposs_to_heading(carposes)
-        car_mpos = gps_util.gps_to_meter(car_gps_pos, base_gpspos)
-        #car_mpos += gps_util.distazimuth_to_meter(1, car_bearing)  # TODOconvert base_gpspos from rear right wheel to center of car
-        blue_cones_meterpos, yellow_cones_meterpos = visual_pipeline(cam="camL3", framenr=frnr, car_pos=car_mpos, car_bearing=t_head)
-        #print(f"camL3_frnr={frnr}, bc_mp={blue_cones_meterpos}, yc_mp={yellow_cones_meterpos}")
-        noslam.measurment(blue_cones_meterpos, yellow_cones_meterpos, car_mpos)
 
-        car_pos.append(car_mpos)
-        all_blue_cones += [bc for bc in blue_cones_meterpos if gps_util.meter_meter_to_dist(bc, car_mpos) < 10]
-        all_yellow_cones += [yc for yc in yellow_cones_meterpos if gps_util.meter_meter_to_dist(yc, car_mpos) < 10]
-
-    #plot cones
-    true_cone_meterpos = [gps_util.gps_to_meter(conepos, base_gpspos) for conepos in poi_true_gpspos[poii_bluecones_range[0]:]]
-    cp, detected_blue_cones, detected_yellow_cones = noslam.get_map()
-    plot_cones(car_pos=car_pos, blue_cones=detected_blue_cones, yellow_cones=detected_yellow_cones, name="cone_position from visual_pipeline_droneparams tracking filter", true_conepos=true_cone_meterpos, save_dir="trackingSLAM5.png")
-    plot_cones(car_pos=car_pos, blue_cones=all_blue_cones, yellow_cones=all_yellow_cones, name="cone_position from visual_pipeline_droneparams only detections < 10 meter from car", true_conepos=true_cone_meterpos, save_dir="noSLAM5.png")
-
-    # get average distance between slam-result cones and true pos cones, and number of non-detected cones, number of color misclassification, number of detected cones that doesnt exist.
-    falsenegatives = 0  # number of true cones that were not detected
-    falsepositives = 0  # number of detected cones that were not true
-    truepositives = 0
-    tot_dist = 0
-    for (true_pos, detected_pos) in [(poi_true_gpspos[poii_bluecones_range[0]:poii_bluecones_range[1]], detected_blue_cones), (poi_true_gpspos[poii_yellowcones_range[0]:poii_yellowcones_range[1]], detected_yellow_cones)]:
-        tmp = [1 for _ in range(len(detected_pos))]
-        for pos in true_pos:
-            # get nearest detected blue cone
-            nd_bc = None
-            mindist = 1
-            for (i, bc) in enumerate(detected_pos):
-                dist = gps_util.meter_meter_to_dist(gps_util.gps_to_meter(pos, gps_base=base_gpspos), bc)
-                if dist < mindist:
-                    nd_bc = i
-                    mindist = dist
-            if nd_bc is None:
-                falsenegatives += 1
+    slam_speedmutli_score = [(0, 0, 0, 0) for _ in range(1, 34)]
+    for speed_multi in range(1, 33):
+        noslam = trackingSLAM()
+        all_blue_cones = []
+        all_yellow_cones = []
+        for frnr in range(1282, 2643, speed_multi):  # frnr of camL3
+            if use_gpspos:
+                t = camL2t(frnr)
+                t_long, i_long = get_at_time(x=gps_long_time, y=gps_long_val, t=t)
+                t_lat = gps_lat_val[i_long]
+                t_head = gps_heading_val[i_long]
+                car_gps_pos = (t_lat, t_long)
             else:
-                tot_dist += mindist
-                truepositives += 1
-                tmp[nd_bc] = 0
-        falsepositives += sum(tmp)
-        print(f"len(detected_pos) = {len(detected_pos)}, len(true_pos) = {len(true_pos)}")
-        print(f"truepositives = {truepositives}, falsenegatives = {falsenegatives}, falsepositives = {falsepositives}, tot_dist = {tot_dist}")
-    print(f"nonSlam5 & {tot_dist/truepositives} & {truepositives} & {falsenegatives} & {falsepositives} & ? \\\\")
+                carposes, _ = get_at_time(x=carpos_dv_time, y=carpos_dv_value, t=get_synced_frame(frnr))
+                car_gps_pos = carposes[3]
+                t_head = gps_util.carposs_to_heading(carposes)
+            car_mpos = gps_util.gps_to_meter(car_gps_pos, base_gpspos)
+            #car_mpos += gps_util.distazimuth_to_meter(1, car_bearing)  # TODOconvert base_gpspos from rear right wheel to center of car
+            blue_cones_meterpos, yellow_cones_meterpos = visual_pipeline(cam="camL3", framenr=frnr, car_pos=car_mpos, car_bearing=t_head)
+            #print(f"camL3_frnr={frnr}, bc_mp={blue_cones_meterpos}, yc_mp={yellow_cones_meterpos}")
+            noslam.measurment(blue_cones_meterpos, yellow_cones_meterpos, car_mpos)
 
+            car_pos.append(car_mpos)
+            all_blue_cones += [bc for bc in blue_cones_meterpos if gps_util.meter_meter_to_dist(bc, car_mpos) < 10]
+            all_yellow_cones += [yc for yc in yellow_cones_meterpos if gps_util.meter_meter_to_dist(yc, car_mpos) < 10]
+
+        print(f"all_blue_cones{speed_multi} = {len(all_blue_cones)}")
+        #plot cones
+        true_cone_meterpos = [gps_util.gps_to_meter(conepos, base_gpspos) for conepos in poi_true_gpspos[poii_bluecones_range[0]:]]
+        cp, detected_blue_cones, detected_yellow_cones = noslam.get_map()
+        plot_cones(car_pos=car_pos, blue_cones=detected_blue_cones, yellow_cones=detected_yellow_cones, name=f"slam_clustered{speed_multi}", true_conepos=true_cone_meterpos, save_dir=f"slam_clustering_{speed_multi}.png")
+        plot_cones(car_pos=car_pos, blue_cones=all_blue_cones, yellow_cones=all_yellow_cones, name=f"slaM_no{speed_multi}", true_conepos=true_cone_meterpos, save_dir=f"slam_no_{speed_multi}.png")
+
+        # get average distance between slam-result cones and true pos cones, and number of non-detected cones, number of color misclassification, number of detected cones that doesnt exist.
+        falsenegatives = 0  # number of true cones that were not detected
+        falsepositives = 0  # number of detected cones that were not true
+        truepositives = 0
+        tot_dist = 0
+        for (true_pos, detected_pos) in [(poi_true_gpspos[poii_bluecones_range[0]:poii_bluecones_range[1]], detected_blue_cones)]:  #, (poi_true_gpspos[poii_yellowcones_range[0]:poii_yellowcones_range[1]], detected_yellow_cones)]:
+            tmp = [1 for _ in range(len(detected_pos))]
+            for pos in true_pos:
+                # get nearest detected blue cone
+                nd_bc = None
+                mindist = 1
+                for (i, bc) in enumerate(detected_pos):
+                    dist = gps_util.meter_meter_to_dist(gps_util.gps_to_meter(pos, gps_base=base_gpspos), bc)
+                    if dist < mindist:
+                        nd_bc = i
+                        mindist = dist
+                if nd_bc is None:
+                    falsenegatives += 1
+                else:
+                    tot_dist += mindist
+                    truepositives += 1
+                    tmp[nd_bc] = 0
+            falsepositives += sum(tmp)
+            print(f"len(detected_pos) = {len(detected_pos)}, len(true_pos) = {len(true_pos)}")
+            print(f"truepositives = {truepositives}, falsenegatives = {falsenegatives}, falsepositives = {falsepositives}, tot_dist = {tot_dist}")
+        print(f"cluster & {speed_multi} & {tot_dist/truepositives} & {truepositives} & {falsenegatives} & {falsepositives} & ? \\\\")
+        slam_speedmutli_score[speed_multi] = (tot_dist/truepositives, truepositives, falsenegatives, falsepositives)
+    # cluster1 & 0.32929957725499276 & 38 & 0 & 0 & ? \\  # all_blue_cones1 = 2637
+    # cluster2 & 0.3321461488511379 & 38 & 0 & 0 & ? \\
+    # cluster3 & 0.33269267861683255 & 38 & 0 & 0 & ? \\
+    # cluster4 & 0.33449306663493383 & 38 & 0 & 0 & ? \\
+    # cluster5 & 0.3441176557997504 & 38 & 0 & 0 & ? \\
+    # cluster6 & 0.3405874432972419 & 38 & 0 & 0 & ? \\
+    # cluster7 & 0.3285988498924712 & 38 & 0 & 0 & ? \\
+    # cluster8 & 0.3446015063036072 & 38 & 0 & 0 & ? \\
+    # cluster9 & 0.33491692973065906 & 38 & 0 & 0 & ? \\
+    # cluster10 & 0.3528956271933093 & 38 & 0 & 0 & ? \\
+    # cluster17 & 0.3390520378267723 & 38 & 0 & 0 & ? \\   # all_blue_cones17 = 162
+    # cluster18 & 0.355423955990584 & 36 & 2 & 0 & ? \\  # all_blue_cones18 = 149
+    # cluster31 & 0.2416109863854577 & 19 & 19 & 0 & ? \\
+    # cluster32 & 0.31844757515014055 & 25 & 13 & 0 & ? \\
+    for speed_multi in range(len(slam_speedmutli_score)):
+        (avg_dist, truepositives, falsenegatives, falsepositives) = slam_speedmutli_score[speed_multi]
+        print(f"cluster & {speed_multi} & {avg_dist} & {truepositives} & {falsenegatives} & {falsepositives} & ? \\\\")
+    # plot score(slam) over speed_multi
+    fig, axe = plt.subplots()
+    axe.set_title("cluster accuracy over speed")
+    axe.set_xlabel("speed of car in 2m/s")
+    axe.set_ylabel("number of detections")
+    axe.plot(np.array(range(len(slam_speedmutli_score))), np.array([truepositives for (avg_dist, truepositives, falsenegatives, falsepositives) in slam_speedmutli_score]), label="cluster_truepositives", color="green")
+    axe.scatter(np.array(range(len(slam_speedmutli_score))), np.array([truepositives for (avg_dist, truepositives, falsenegatives, falsepositives) in slam_speedmutli_score]), marker='x', label="cluster_truepositives", color="green")  # ValueError: s must be a scalar, or float array-like with the same size as x and y
+    axe.plot(np.array(range(len(slam_speedmutli_score))), np.array([falsepositives for (avg_dist, truepositives, falsenegatives, falsepositives) in slam_speedmutli_score]), label="cluster_falsepositives", color="green")
+    axe.scatter(np.array(range(len(slam_speedmutli_score))), np.array([falsepositives for (avg_dist, truepositives, falsenegatives, falsepositives) in slam_speedmutli_score]), marker='x', label="cluster_falsepositives", color="green")
+    axe.legend()
+    axe.grid()
+    fig.show()
+    fig.savefig("slam_cluster_acc_over_speed.png")
 
 def get_true_carstate():
     visout_praefix = "tcs_"
@@ -1743,8 +1744,94 @@ def get_true_carstate():
             fig.show()
 
 
+def plot_gnss_vs_droneview():
+    sdd = read_csv("merged_rundata_csv/alldata_2022_12_17-14_43_59_id3.csv")
+    lat_time = sdd["GNSS_latitude_UsbFlRec"+x_ending]
+    lat_val = sdd["GNSS_latitude_UsbFlRec"]*np.pi/180
+    long_time = sdd["GNSS_longitude_UsbFlRec"+x_ending]
+    long_val = sdd["GNSS_longitude_UsbFlRec"]*np.pi/180
+    gnss_heading_time = sdd["GNSS_heading_UsbFlRec"+x_ending]
+    gnss_heading_val = sdd["GNSS_heading_UsbFlRec"]*np.pi/180
+    time_som_secodns = 100
+    for i in range(len(lat_time)):
+        if lat_time[i] > time_som_secodns:
+            lat_time = lat_time[i:]
+            lat_val = lat_val[i:]
+            break
+    for i in range(len(long_time)):
+        if long_time[i] > time_som_secodns:
+            long_time = long_time[i:]
+            long_val = long_val[i:]
+            break
+    poi_true_gps_positions_radiants, carpos = true_pos_from_droneimg_pxpos()
+    carposkeys = list(carpos.keys())
+    carposkeys.sort()
+    carpos_time = [t2ssdt(drone2t(carposkeys[i]))+2 for i in range(len(carposkeys))]  # carpos_time[i] = carposkeys[i]/25+26.5
+    #carpos_val = [gps_util.average(carpos[k]) for k in carposkeys]
+    carpos_val = [carpos[k][3] for k in carposkeys]
+    carpos_heading_val = [gps_util.carposs_to_heading(carpos[k]) for k in carposkeys]
+
+    for i in range(len(carpos_time)):
+        if carpos_time[i] > time_som_secodns:
+            carpos_time = carpos_time[i:]
+            carpos_val = carpos_val[i:]
+            break
+    carposlat_val = [lat for (lat, long) in carpos_val]
+    carposlong_val = [long for (lat, long) in carpos_val]
+
+    time, (gnss_lat, gnss_long, tp_lat, tp_long) = multi_timesinc([(lat_time, lat_val), (long_time, long_val), (carpos_time, carposlat_val), (carpos_time, carposlong_val)])
+    plot_and_save("lats", x_in=time, ys=[gnss_lat, tp_lat], names=["gnss_lat", "tp_lat"], save_dir="vis_out/lattitudes.png")
+    plot_and_save("lats", x_in=time, ys=[gnss_long, tp_long], names=["gnss_long", "tp_long"], save_dir="vis_out/longitudes.png")
+    dists = [gps_util.gps_to_dist((gnss_lat[i], gnss_long[i]), (tp_lat[i], tp_long[i])) for i in range(len(time))]
+    plot_and_save("dist(true_gnss_pos, gnss_pos)", x_in=time, ys=[dists], save_dir="vis_out/gnss_true_dists.png")
+    plot_colorgradientline("gnss_position", gnss_lat, gnss_long, time)
+
+    # plot heading from gps and droneview against each other
+    fig, axe = plt.subplots()
+    axe.set_title("heading")
+    axe.plot(carpos_time, carpos_heading_val, label="heading from drone")
+    axe.plot(gnss_heading_time, gnss_heading_val, label="heading from gps")
+    axe.legend()
+    axe.grid()
+    fig.show()
+    fig.savefig("vis_out/headings.png")
+
+
+def print_hz(name: str, time: [seconds], value: [float]) -> None:
+    # print the average distance (in seconds) between two consecetive measurements.
+    print(f"{name}: length (seconds)/number of measurements {(max(time)-min(time))/len(time)}")
+    seconds_til_new_mes = []
+    oldv = value[0]
+    oldt = time[0]
+    seconds_til_new_time = []
+    ot = time[0]
+    for (t, v) in zip(time, value):
+        if t != ot:
+            seconds_til_new_time.append(t-ot)
+            ot = t
+        if v != oldv:
+            seconds_til_new_mes.append(t-oldt)
+            oldv = v
+            oldt = t
+    print(f"{name}: time [s] between different value values average = {np.average(seconds_til_new_mes)}, median = {np.median(seconds_til_new_mes)}, number_of_different_values = {len(seconds_til_new_mes)}")
+    #print(f"{name}: time [s] between different time vlaues average = {np.average(seconds_til_new_time)}, median = {np.median(seconds_til_new_time)}")
+
+    #fig, axe = plt.subplots()
+    #axe.plot(np.linspace(0, 1, len(seconds_til_new_mes)), seconds_til_new_mes, label="new mes")
+    ##axe.plot(np.linspace(0, 1, len(seconds_til_new_time)), seconds_til_new_time, label="new time")
+    #axe.grid()
+    #axe.legend()
+    #axe.set_title(f"{name}: avg time between different mes/time values")
+    #axe.set_ylabel("timediff in seconds")
+    #axe.set_xlabel(f"np.linspace(0, 1, {len(seconds_til_new_mes)}|{len(seconds_til_new_time)})")
+    #fig.show()
+
+
 def main():
-    test_Slam()
+    sdd = read_csv("merged_rundata_csv/alldata_2022_12_17-14_43_59_id3.csv")
+    for k in relevant_keys:
+        print_hz(k_to_name(k), sdd[k+x_ending], sdd[k])
+    #test_Slam()
     #get_true_carstate()
 
 
@@ -1785,6 +1872,7 @@ def all_functions():
     plot_from_pos_and_sensor()
     plot_cones()
     plot_on_googlemaps()
+    plot_gnss_vs_droneview()
     # manuel
     get_laptoptimes_for_camFrames()
     get_car_moves_starttime_from_sensors()
@@ -1794,7 +1882,6 @@ def all_functions():
     custom_pnp_validate()
     print_synced_frame()
     get_synced_frame()
-    print_synced_pos_bearing_from_drone_and_sensors()
     # testing for cpp implementation
     custom_PnP()
     visual_pipeline()

@@ -216,19 +216,73 @@ def draw_numberd_bounding_boxes(img_file: os.path, label_file: os.path, keypoint
     cv2.imshow(str(img_file), cv2.resize(img, (1800, 1000)))
     cv2.waitKey(0)
 
+def bb_overlap(bb_a, bb_b):
+    # gven two bounding boxes in the (class, center_width, center_height, size_width, size_height) format, computes the fraction that the intersection of these boxes cover of the larger of the two boxes.
+    (cls_a, pw_a, ph_a, sw_a, sh_a) = bb_a
+    (cls_b, pw_b, ph_b, sw_b, sh_b) = bb_b
 
-def sort_bblabels_by_cls():
-    labels_dir=pathlib.Path(labels_dir="C:/Users/Idefix/PycharmProjects/OpenLabeling/main/output/YOLO_darknet/")
-    for label_file in [f for f in os.listdir(labels_dir)]:
-        if len(str(label_file).split(".")) == 3:
+    sw = min(pw_a+0.5*sw_a, pw_b+0.5*sw_b)-max(pw_a-0.5*sw_a, pw_b-0.5*sw_b)
+    sh = min(ph_a+0.5*sh_a, ph_b+0.5*sh_b)-max(ph_a-0.5*sh_a, ph_b-0.5*sh_b)
+    if sw < 0 or sh < 0:
+        return 0  # boxes dont overlap
+    return sw*sh/max(sw_a*sh_a, sw_b*sh_b)
+
+
+def poii_bb_files2std():
+    poiibb_dir = pathlib.Path("C:/Users/Idefix/PycharmProjects/OpenLabeling/main/output/YOLO_darknet/")
+    vp_labels_dir = pathlib.Path("C:/Users/Idefix/PycharmProjects/tmpProject/vp_labels/")  # cone-keypoint annotations for all
+    bbi_poii_dir = pathlib.Path("C:/Users/Idefix/PycharmProjects/tmpProject/vp_labels/bbi_poii")
+    # line in file in input_dir: poii, bb
+    # line in output_idr/camL3_bb: cls, bb
+    # math bbs, write poii of bb in (same row as bb in output_dir/camL3_bb) in output_dir/bbi_poii/same_name_as_filre_in_output_dir/camL3_bb
+    poiibb_files = [file for file in os.listdir(poiibb_dir)]
+    clsbb_files = [file for file in os.listdir(vp_labels_dir/"camL3_bb")]
+    # should be equal
+    fully_annotated_files = set(poiibb_files).intersection(set(clsbb_files))
+
+    fully_annotated_files = list(fully_annotated_files)
+    fully_annotated_files.sort()
+    for filename in fully_annotated_files:
+        poii_bb = []
+        with open(poiibb_dir/filename) as f:
+            poii_bb = f.readlines()
+        #classid, pos_width, pos_hight, width, height = line.split(" ")
+        if len(poii_bb) == 0:
             continue
+        print("\nfilename =", filename)
+        poii_bb = [(int(classid), float(pos_width), float(pos_hight), float(width), float(height)) for (classid, pos_width, pos_hight, width, height) in [line.split(" ") for line in poii_bb]]
+        print(f"poii_bb = {poii_bb[:5]}")
+        cls_bb = []
+        with open(vp_labels_dir/"camL3_bb"/filename) as f:
+            cls_bb = f.readlines()
+        cls_bb = [(int(classid), float(pos_width), float(pos_hight), float(width), float(height)) for (classid, pos_width, pos_hight, width, height) in [line.split(" ") for line in cls_bb]]
+        bbi_poii_file = [-1 for _ in range(len(cls_bb))]
+        for cls_bb_i, line in enumerate(cls_bb):
+            max_poii_bb_i = -1
+            max_overlap = 0
+            for poii_bb_i in range(len(poii_bb)):
+                if bb_overlap(line, poii_bb[poii_bb_i]) > max_overlap:
+                    max_poii_bb_i = poii_bb_i
+                    max_overlap = bb_overlap(line, poii_bb[poii_bb_i])
+            if max_overlap > 0.6:
+                # line and poii_bb[poii_line_i] are the same bb
+                poii = poii_bb[max_poii_bb_i][0]+9
+                if cls_bb[0] == 0:
+                    assert 8 < poii < 47  # only cones with poii in this range are blue
+                if cls_bb[1] == 1:
+                    assert 46 < poii < 88  # ony cones with poii in this range are yellow
+                    assert poii != 68  # 68 is no cone
+                bbi_poii_file[cls_bb_i] = poii
+        with open(bbi_poii_dir/filename, 'w') as f:
+            f.write("\n".join([str(index0) for index0 in bbi_poii_file]))
 
 if __name__ == "__main__":
+    poii_bb_files2std()
     datasets_path = pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/")
-    cutout_cones_yoloformat(images_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/OpenLabeling/main/input"), labels_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/OpenLabeling/main/output/YOLO_darknet/"), output_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cones/"))
+    #cutout_cones_yoloformat(images_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/OpenLabeling/main/input"), labels_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/OpenLabeling/main/output/YOLO_darknet/"), output_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cones/"))
     #for frnr in range(2360, 4021, 10):
-    #i = 1307
-    #draw_numberd_bounding_boxes(img_file=datasets_path/pathlib.Path(f"testrun_2022_12_17/cam_footage/left_cam_14_46_00/camL3_frame_{i}.jpg"), label_file=pathlib.Path(f"C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/labels/camL3_frame_{i}.txt"), keypoint_file=datasets_path/pathlib.Path("keypoints/cone_annotations.csv"))
+    i = 1280
+    draw_numberd_bounding_boxes(img_file=datasets_path/pathlib.Path(f"testrun_2022_12_17/cam_footage/left_cam_14_46_00/camL3_frame_{i}.jpg"), label_file=pathlib.Path(f"C:/Users/Idefix/PycharmProjects/tmpProject/vp_labels/camL3_bb/camL3_frame_{i}.txt"), keypoint_file=datasets_path/pathlib.Path("keypoints/cone_annotations.csv"))
     #draw_cone_keypoints(img_file=datasets_path/pathlib.Path("keypoints/cones/camL3_frame_1562.jpg_cone_0.jpg"), label_file=datasets_path/pathlib.Path("keypoints/cone_annotations.csv"))
     #cutout_cones_yoloformat(images_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/images"),
     #                        labels_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/labels"),
