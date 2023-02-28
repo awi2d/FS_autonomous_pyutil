@@ -33,6 +33,8 @@ def degree_to_radiants(gps: gps_pos_degree) -> gps_pos_radiant:
     return d2r*gps[0], d2r*gps[1]
 
 
+def carposs_to_gnsspos(carposes: [gps_pos_degree]) -> gps_pos_degree:
+    return np.array([0.5*0.21/1.54*(carposes[0][0]+carposes[1][0])+0.5*(1-0.21/1.54)*(carposes[2][0]+carposes[3][0]), 0.5*0.23/1.23*(carposes[0][1]+carposes[2][1])+0.5*(1-0.23/1.23)*(carposes[1][1]+carposes[3][1])])
 def carposs_to_heading(carposes: [gps_pos_degree]) -> heading_radiants:
     # gps = [Left front wheel gps-position in degree, Right front wheel, Left rear wheel, Right rear wheel]
     # 0: front axis is north of rear axis
@@ -45,10 +47,10 @@ def average(poses: [gps_pos_degree]) -> gps_pos_degree:
 
 
 def _gps_to_distazimuth(gps: gps_pos_radiant, gps_base: gps_pos_radiant) -> (meter, heading_radiants):
-    if any([x < -np.pi or x > np.pi for x in gps]):
+    if any([x < -2*np.pi or x > 2*np.pi for x in gps]):
         warnings.warn(f"gps_util._gps_to_distazimuth: gps {gps} should be in radiants, not degree.")
         gps = degree_to_radiants(gps)
-    if any([x < -np.pi or x > np.pi for x in gps_base]):
+    if any([x < -2*np.pi or x > 2*np.pi for x in gps_base]):
         warnings.warn(f"gps_util._gps_to_distazimuth: gps_base {gps_base} should be in radiants, not degree.")
         gps_base = degree_to_radiants(gps_base)
 
@@ -108,10 +110,10 @@ def gps_to_azimuth(gps: gps_pos_radiant, gps_base: gps_pos_radiant) -> heading_r
 
 
 def distazimuth_to_gps(gps_base: gps_pos_radiant, dh_vector: (meter, heading_radiants)) -> gps_pos_radiant:
-    if any([x < -np.pi or x > np.pi for x in gps_base]):
+    if any([x < -2*np.pi or x > 2*np.pi for x in gps_base]):
         warnings.warn(f"gps_util.distazimuth_to_gps: gps_base {gps_base} should be in radiants, not degree.")
         gps_base = degree_to_radiants(gps_base)
-    if dh_vector[1] < -np.pi or dh_vector[1] > np.pi:
+    if dh_vector[1] < -2*np.pi or dh_vector[1] > 2*np.pi:
         warnings.warn(f"gps_util.distazimuth_to_gps: dh_vector {dh_vector} [1] should be in radiants, not degree")
         dh_vector = (dh_vector[0], d2r*dh_vector[1])
     (lat_base, long_base) = gps_base
@@ -153,10 +155,10 @@ def meter_to_distazimuth(meter_vecotr: (meter_north, meter_east)) -> (meter, hea
 
 def distazimuth_to_meter(dh_vector: (meter, heading_radiants)) -> (meter_north, meter_east):
     (dist, azimuth) = dh_vector
-    if azimuth < -np.pi or azimuth > np.pi:
+    if azimuth < -2*np.pi or azimuth > 2*np.pi:
         warnings.warn(f"gps_util.distazimuth_to_meter: dh_vector {dh_vector} [1] should be in radiants")
         azimuth = d2r*azimuth
-    return np.cos(azimuth)*dist, np.sin(azimuth)*dist
+    return np.array([np.cos(azimuth)*dist, np.sin(azimuth)*dist])
 
 
 def gps_to_meter(gps: (lattitude, longitude), gps_base: (lattitude, longitude)) -> (meter_north, meter_east):
@@ -171,7 +173,7 @@ def meter_to_gps(gps_base: (lattitude, longitude), meter_vector: (meter_north, m
 
 if __name__ == "__main__":
     # check that this is working correctly.
-    base = (51.46411414940673, 6.738944977588712)  # gully
+    base = (51.46411414940673, 6.738944977588712)  # manhole cover (gully)
     south = (51.46390029594143, 6.738944977588712)  # south is south of base
     west = (51.46411414940673, 6.738611222776312)  # west is west of base
     north = (51.464253785357734, 6.738944977588712)

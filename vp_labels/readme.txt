@@ -5,7 +5,7 @@ camL3_bb:
 	classindex: 0: blue, 1: yellow, 2: orange
 	position and size in pixel_position/size of the image in that direction.
 	So the upper left corner of the bounding box is at pixel ( (width_position-0.5*width_size)*width_of_image, (height_position-0.5*height_size)*height_of_image)
-
+	TODO frame 1306 and 1308 have 14 cones visible, frame 1307 only 7? check.
 camL3_poiibb:
 	same format as camL3_bb, but the classindex is the point-of-interest-id, instead of color. see ../point_of_interest_numbers.jpg for the meaning of these numbers.
 
