@@ -70,7 +70,7 @@ def _gps_to_distazimuth(gps: gps_pos_radiant, gps_base: gps_pos_radiant) -> (met
         sin_sigma = np.sqrt((cos_u2*sin_lambda)**2+(cos_u1*sin_u2-sin_u1*cos_u2*cos_lambda)**2)
         cos_sigma = sin_u1*sin_u2+cos_u1*cos_u2*cos_lambda
         sigma = np.arctan2(sin_sigma, cos_sigma)
-        sin_alpha = cos_u1*cos_u2*sin_lambda/sin_sigma  # TODO RuntimeWarning: invalid value encountered in double_scalars sin_alpha = cos_u1*cos_u2*sin_lambda/sin_sigma
+        sin_alpha = cos_u1*cos_u2*sin_lambda/sin_sigma
         cos_alpha_sqrd = 1-sin_alpha**2
         cos_2sm = cos_sigma - 2*sin_u1*sin_u2/cos_alpha_sqrd
         C = f/16*cos_alpha_sqrd*(4+f*(4-3*cos_alpha_sqrd))
