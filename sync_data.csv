@@ -12,3 +12,5 @@ run_id,name,start_of_recording,end_of_recording,length_of_recording,start_of_mov
 3,right_cam_14_46_00,14:44:59.26,14:47:15.03,02:15.30,14:46:00.51,1225,14:47:08.56,2586,01:08.05
 3,alldata_2022_12_17-14_43_59_id3,14:43:59,14:47:23.119204,03:24.12,14:45:57,None,14:47:05,None,01:08.20
 3,drone_cam_DJI_0456.MP4,14:44:26.92,14:47:19.24,03:22.3,14:46:01.5,2360,14:47:08,4039,01:06.95
+3,lat and long are in sync between drone image and gnss recording for alldata_time = (drone_frnr – 2340)/25 + 118 + 2,,,,,,,,
+,camL3_frnr/20 = drone3_frnr/25-29.56,,,,,,,,

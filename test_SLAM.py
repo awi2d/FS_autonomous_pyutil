@@ -4,7 +4,7 @@ import pathlib
 import matplotlib.pyplot as plt
 import numpy as np
 from util import getType, plot_and_save, smothing, to_range, get_at_time
-from show_sensorlogs import read_csv, x_ending, true_pos_from_droneimg_pxpos, visual_pipeline, plot_cones, camL2t, get_synced_frame, poii_bluecones_range, poii_yellowcones_range,get_boundingboxes_keypoints_poii, custom_PnP, t2ssdt, drone2t
+from show_sensorlogs import read_csv, x_ending, true_pos_from_droneimg_pxpos, visual_pipeline, plot_cones, camL2t, get_synced_frame, poii_bluecones_range, poii_yellowcones_range,get_boundingboxes_keypoints_poii, custom_PnP, t2ssdt, drone2t, ssdt2t, t2drone
 import gps_util
 
 vis_out_path = pathlib.Path("vis_out_slam/")
@@ -566,7 +566,7 @@ def writ_vpaux():
 
 
 def write_dronefrnr_gnsscarpose():
-    filename = "C:/Users/Idefix/PycharmProjects/tmpProject/vp_labels/droneview/droneFrnr_gnssMPose.txt"
+    filename = "C:/Users/Idefix/PycharmProjects/tmpProject/vp_labels/droneview/droneFrnr_gnssMPose2.txt"
     sdd = read_csv("merged_rundata_csv/alldata_2022_12_17-14_43_59_id3.csv")
     lat_gnns_time = sdd["GNSS_latitude_UsbFlRec"+x_ending]
     lat_gnss_value = sdd["GNSS_latitude_UsbFlRec"]*np.pi/180
@@ -574,18 +574,22 @@ def write_dronefrnr_gnsscarpose():
     gnss_heading_val = sdd["GNSS_heading_UsbFlRec"]*np.pi/180
     vabs_gnss_time = sdd["GNSS_speed_over_ground_UsbFlRec"+x_ending]
     vabs_gnss_val = sdd["GNSS_speed_over_ground_UsbFlRec"]
-    out = []  # 2341,18.05835362098905,-0.8706880554368297,2.6704131639045965, frnr, pose
+    out = []  # (drone_frnr,meter_north,meter_east,vabs,frnr,pose)
     old_heading = gnss_heading_val[0]
-    for drone_frnr in range(2341, 4032):
-        t = t2ssdt(drone2t(drone_frnr))+2
-        lat, i = get_at_time(lat_gnns_time, lat_gnss_value, t)
-        long = long_gnss_val[i]
-        lat, long = gps_util.gps_to_meter((lat, long), gps_base)
-        heading = gnss_heading_val[i]
-        vabs, _ = get_at_time(vabs_gnss_time, vabs_gnss_val, t)
-        yawrate = heading-old_heading
-        old_heading = heading
-        out.append(f"{drone_frnr},{lat},{long},{heading},{vabs},{yawrate}\n")
+    # TODO only write on frames where new GNSS measurement is available
+    last_gnss_val = (0, 0)
+    for i in range(len(lat_gnss_value)):
+        drone_frnr = t2drone(ssdt2t(lat_gnns_time[i]))
+        if lat_gnss_value[i] != last_gnss_val[0] or long_gnss_val[i] != last_gnss_val[1]:
+            # new gnss measurement -> append to out.
+            last_gnss_val = (lat_gnss_value[i], long_gnss_val[i])
+            lat, long = gps_util.gps_to_meter((lat_gnss_value[i], long_gnss_val[i]), gps_base)
+            heading = gnss_heading_val[i]
+            vabs, _ = get_at_time(vabs_gnss_time, vabs_gnss_val, lat_gnns_time[i])
+            yawrate = heading-old_heading
+            old_heading = heading
+            out.append(f"{drone_frnr},{lat},{long},{heading},{vabs},{yawrate}\n")
+            #out.append((drone_frnr, lat, long, heading, vabs, yawrate))
     with open(filename, 'w') as f:
         f.writelines(out)
 
@@ -642,8 +646,9 @@ def odometry_error():
 
 
 def main():
-    # plot SLAM truepositive over s
-    # peedmult
+    write_dronefrnr_gnsscarpose()
+    exit(0)
+    # plot SLAM truepositive over speedmult
     g2o_slam_speedmulti_scores = {}
     for name in ["full", "noFrontend"]:
         tests = [(name, i) for i in range(1, 20)]  # (name, speedmult
@@ -682,7 +687,7 @@ def main():
     axe_fp.plot(np.array(range(1, 1+len(noFront_speedmutli_score))), np.array([falsepositives for (path_dist, truepositives, falsenegatives, falsepositives) in noFront_speedmutli_score]), color="green")
     axe_fp.scatter(np.array(range(1, 1+len(noFront_speedmutli_score))), np.array([falsepositives for (path_dist, truepositives, falsenegatives, falsepositives) in noFront_speedmutli_score]), marker='x', label="noFrontend_falsepositives", color="green")
     axe_pd.plot(np.array(range(1, 1+len(noFront_speedmutli_score))), np.array([path_dist for (path_dist, truepositives, falsenegatives, falsepositives) in noFront_speedmutli_score]), color="green")
-    axe_pd.scatter(np.array(range(1, 1+len(noFront_speedmutli_score))), np.array([path_dist for (path_dist, truepositives, falsenegatives, falsepositives) in noFront_speedmutli_score]), marker='^', label="10*noFrontend_pathdist", color="green")
+    axe_pd.scatter(np.array(range(1, 1+len(noFront_speedmutli_score))), np.array([path_dist for (path_dist, truepositives, falsenegatives, falsepositives) in noFront_speedmutli_score]), marker='^', label="noFrontend_pathdist", color="green")
 
     fullslam_speedmutli_score = g2o_slam_speedmulti_scores["full"]
     axe_tp.plot(np.array(range(1, 1+len(fullslam_speedmutli_score))), np.array([truepositives for (path_dist, truepositives, falsenegatives, falsepositives) in fullslam_speedmutli_score]), color="red")
@@ -690,7 +695,7 @@ def main():
     axe_fp.plot(np.array(range(1, 1+len(fullslam_speedmutli_score))), np.array([falsepositives for (path_dist, truepositives, falsenegatives, falsepositives) in fullslam_speedmutli_score]), color="red")
     axe_fp.scatter(np.array(range(1, 1+len(fullslam_speedmutli_score))), np.array([falsepositives for (path_dist, truepositives, falsenegatives, falsepositives) in fullslam_speedmutli_score]), marker='x', label="full_falsepositives", color="red")
     axe_pd.plot(np.array(range(1, 1+len(fullslam_speedmutli_score))), np.array([path_dist for (path_dist, truepositives, falsenegatives, falsepositives) in fullslam_speedmutli_score]), color="red")
-    axe_pd.scatter(np.array(range(1, 1+len(fullslam_speedmutli_score))), np.array([path_dist for (path_dist, truepositives, falsenegatives, falsepositives) in fullslam_speedmutli_score]), marker='^', label="10*full_pathdist", color="red")
+    axe_pd.scatter(np.array(range(1, 1+len(fullslam_speedmutli_score))), np.array([path_dist for (path_dist, truepositives, falsenegatives, falsepositives) in fullslam_speedmutli_score]), marker='^', label="full_pathdist", color="red")
 
     axe_tp.legend()
     axe_fp.legend()
