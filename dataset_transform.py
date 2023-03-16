@@ -277,7 +277,7 @@ def poii_bb_files2std():
             f.write("\n".join([str(index0) for index0 in bbi_poii_file]))
 
 if __name__ == "__main__":
-    poii_bb_files2std()
+    #poii_bb_files2std()
     datasets_path = pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/")
     #cutout_cones_yoloformat(images_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/OpenLabeling/main/input"), labels_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/OpenLabeling/main/output/YOLO_darknet/"), output_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/keypoints/cones/"))
     #for frnr in range(2360, 4021, 10):
