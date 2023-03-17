@@ -1,7 +1,10 @@
+import pathlib
+
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.optimize
 
+project_root_path = pathlib.Path("C:/Users/johan/PycharmProjects/FS_autonomous_pyutil/")
 def getType(x):
     """
     :param x:

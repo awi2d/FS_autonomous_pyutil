@@ -437,14 +437,15 @@ def test_slamfrontend():
 
 
 def read_g2o_graphsave(name: str, time_of_save: str = "after"):
+    path = "C:/Users/johan/PycharmProjects/FS_autonomous_pyutil/g2o_res/"
     # return the factor graph stored by g2o.
     conevertex_metainfo = {}
-    with open(f"C:/src/g2o_git/bin/{name}conevertex_metainfo.txt") as f:
+    with open(f"{path}/{name}conevertex_metainfo.txt") as f:
         for line in f.readlines():
             (coneid, information, color) = line.split(",")
             conevertex_metainfo[int(coneid)] = (float(information), int(color))
-            file = pathlib.Path(f"C:/src/g2o_git/bin/{name}_{time_of_save}.g2o")
 
+    file = pathlib.Path(f"{path}/{name}_{time_of_save}.g2o")
     vertex_se2 = {}
     vertex_point_xy = {}
     edge_se2 = set()
@@ -646,7 +647,7 @@ def odometry_error():
 
 
 def main():
-    write_dronefrnr_gnsscarpose()
+    display_g2o_graph("full_1")
     exit(0)
     # plot SLAM truepositive over speedmult
     g2o_slam_speedmulti_scores = {}

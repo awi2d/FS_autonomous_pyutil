@@ -8,7 +8,7 @@ import datetime
 import matplotlib.pyplot as plt
 import scipy.optimize
 
-from util import getType, plot_and_save, smothing, to_range, get_at_time, multi_timesinc, fit_poly_fun_and_print
+from util import getType, plot_and_save, smothing, to_range, get_at_time, multi_timesinc, fit_poly_fun_and_print, project_root_path
 import gps_util
 
 #<constants>
@@ -736,7 +736,7 @@ def true_pos_from_droneimg_pxpos(point_file=None) -> ([gps_util.gps_pos_radiant]
         # carpos = {donre3_framenr: [front_left_tire, front_right_tire, rear_left_tire, rear_right_tire]:[gps_util.gps_pos_radiants]
         # maybe have this in a file or something. its 180 lines long.
         carpos = {}
-        with open("C:/Users/Idefix/PycharmProjects/tmpProject/vp_labels/droneview/droneview_frnr_carposes.txt") as f:
+        with open(project_root_path/"vp_labels/droneview/droneview_frnr_carposes.txt") as f:
             for line in f.readlines():
                 dronefrnr = int(line.split("_")[0])
                 carposes = [np.array([float(tmp.split("#")[0]), float(tmp.split("#")[1])]) for tmp in line.split("_")[1].split(",")]
@@ -1451,12 +1451,16 @@ def get_true_carstate():
                      "SWS_angle_UsbFlRec"]
 
     # no of the combinations look like good fits.
-    test_correlation = [((k_to_name("ECU_ACC_Y_UsbFlRec"), sdd["ECU_ACC_Y_UsbFlRec"+x_ending], smothing(sdd["ECU_ACC_Y_UsbFlRec"+x_ending], sdd["ECU_ACC_Y_UsbFlRec"], 5)), ("yawrate_gnss", yawrate_gnss_time, smothing(yawrate_gnss_time, yawrate_gnss_value, 1)))]  # "ECU_ACC_X_UsbFlRec", "Converter_L_N_actual_UsbFlRec", "Converter_L_Torque_Out_UsbFlRec"
+    # "ECU_ACC_X_UsbFlRec", "Converter_L_N_actual_UsbFlRec", "Converter_L_Torque_Out_UsbFlRec"
+    # vx' = vy*yawrate+ax
+    # vy' = -vx*yawrate+ay
+    test_correlation = [
+        ((k_to_name("ECU_ACC_Y_UsbFlRec"), sdd["ECU_ACC_Y_UsbFlRec"+x_ending], smothing(sdd["ECU_ACC_Y_UsbFlRec"+x_ending], sdd["ECU_ACC_Y_UsbFlRec"], 5)),
+         ("yawrate_gnss", yawrate_gnss_time, smothing(yawrate_gnss_time, yawrate_gnss_value, 1))), (("ax_gnss", ax_gnss_time, ax_gnss_value), ("ax_imu", sdd["ECU_ACC_X_UsbFlRec"+x_ending], sdd["ECU_ACC_X_UsbFlRec"]))]
     normalise = True
     # [("vx", vabs_gnss_time, smothing(vabs_gnss_time, vabs_gnss_value, 0.5)), ("der(vabs_gnss)", ax_gnss_time, smothing(ax_gnss_time, ax_gnss_value, 3))]:  # ("aabs_imu", ax_imu_time, imu_aabs_value)
     for (name_x, time_x, value_x), (name_y, time_y, value_y) in test_correlation:
         print(f"fit linear function from {name_x} to {name_y}")
-
         if normalise:
             # normalise values to range [0, 1]
             value_x = np.array(value_x)
@@ -1466,6 +1470,12 @@ def get_true_carstate():
             value_x = (value_x-minx)/(maxx-minx)
             value_y = (value_y-miny)/(maxy-miny)
 
+        # plot (normalised) x and y in same plot
+        fig, axe = plt.subplots()
+        axe.set_title(f"{name_x} and {name_y}")
+        axe.plot(time_x, value_x, label=name_x)
+        axe.plot(time_y, value_y, label=name_y)
+        fig.savefig(f"{visout_praefix}{name_x}_and_{name_y}.png")
         # fit function from normalised value_x -> normalised(value_y)
         time, (syncd_x_value, synced_y_value) = multi_timesinc([(time_x, value_x), (time_y, value_y)])
         fun, parameters = fit_poly_fun_and_print(syncd_x_value, synced_y_value, f"{name_x} to {name_y}", exponents=[0, 1])
@@ -1478,7 +1488,7 @@ def get_true_carstate():
             tmp = (maxy-miny)/(maxx-minx)
             offset, fac = parameters
             parameters = np.array([offset*(maxy-miny)+miny-fac*tmp*minx, fac*tmp])
-        plot_and_save(visout_praefix+f"fit_lin_{name_x}_to_{name_y}", x_in=time, ys=[synced_y_value, fun(syncd_x_value, parameters)], names=[name_y, f"{parameters[1]:.2E}*{name_x}+{parameters[0]:.2E}"], avgs=False)
+        plot_and_save(f"{visout_praefix}fit_lin_{name_x}_to_{name_y}", x_in=time, ys=[synced_y_value, fun(syncd_x_value, parameters)], names=[name_y, f"{parameters[1]:.2E}*{name_x}+{parameters[0]:.2E}"], avgs=False)
         #fig, axe = plt.subplots()
         #axe.set_title(f"{visout_praefix}fit_lin_{k_name}_to_{name}")
         #axe.plot(time, syncd_data_value, label=name)
@@ -1590,8 +1600,8 @@ def main():
     #custom_pnp_find_parameters()
     #custom_pnp_validate()
     #test_Slam()
-    #get_true_carstate()
-    custom_pnp_validate()
+    get_true_carstate()
+    #custom_pnp_validate()
 
 
 if __name__ == "__main__":
