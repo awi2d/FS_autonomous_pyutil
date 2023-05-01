@@ -184,6 +184,7 @@ def draw_cone_keypoints(img_file: os.path, label_file: os.path):
 
 def draw_numberd_bounding_boxes(img_file: os.path, label_file: os.path, keypoint_file: os.path=None):
     img = cv2.imread(str(img_file))
+    print(f"read image", str(img_file))
     img_h, img_w, _ = img.shape
     print("(h, w) = ", (img_h, img_w))
     keypoints = {}
@@ -216,6 +217,7 @@ def draw_numberd_bounding_boxes(img_file: os.path, label_file: os.path, keypoint
     cv2.imshow(str(img_file), cv2.resize(img, (1800, 1000)))
     cv2.waitKey(0)
 
+
 def bb_overlap(bb_a, bb_b):
     # gven two bounding boxes in the (class, center_width, center_height, size_width, size_height) format, computes the fraction that the intersection of these boxes cover of the larger of the two boxes.
     (cls_a, pw_a, ph_a, sw_a, sh_a) = bb_a
@@ -234,7 +236,7 @@ def poii_bb_files2std():
     bbi_poii_dir = pathlib.Path("C:/Users/Idefix/PycharmProjects/tmpProject/vp_labels/bbi_poii")
     # line in file in input_dir: poii, bb
     # line in output_idr/camL3_bb: cls, bb
-    # math bbs, write poii of bb in (same row as bb in output_dir/camL3_bb) in output_dir/bbi_poii/same_name_as_filre_in_output_dir/camL3_bb
+    # match bbs, write poii of bb in (same row as bb in output_dir/camL3_bb) in output_dir/bbi_poii/same_name_as_filre_in_output_dir/camL3_bb
     poiibb_files = [file for file in os.listdir(poiibb_dir)]
     clsbb_files = [file for file in os.listdir(vp_labels_dir/"camL3_bb")]
     # should be equal
@@ -284,7 +286,7 @@ if __name__ == "__main__":
     i = 1280
     draw_numberd_bounding_boxes(img_file=datasets_path/pathlib.Path(f"testrun_2022_12_17/cam_footage/left_cam_14_46_00/camL3_frame_{i}.jpg"), label_file=pathlib.Path(f"C:/Users/Idefix/PycharmProjects/tmpProject/vp_labels/camL3_bb/camL3_frame_{i}.txt"), keypoint_file=datasets_path/pathlib.Path("keypoints/cone_annotations.csv"))
     #draw_cone_keypoints(img_file=datasets_path/pathlib.Path("keypoints/cones/camL3_frame_1562.jpg_cone_0.jpg"), label_file=datasets_path/pathlib.Path("keypoints/cone_annotations.csv"))
-    #cutout_cones_yoloformat(images_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/images"),
+    cutout_cones_yoloformat(images_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/images"),
     #                        labels_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated/labels"),
     #                        output_dir=pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/keypoints/images"))
     #cutout_cones_fscoco(pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/fscoco_sample_translated"), pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/keypoints"))

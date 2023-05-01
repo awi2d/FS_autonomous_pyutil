@@ -1,6 +1,7 @@
 import os
 import pathlib
 
+import cv2
 import matplotlib.collections
 import numpy as np
 import mat73
@@ -8,6 +9,7 @@ import datetime
 import matplotlib.pyplot as plt
 import scipy.optimize
 
+import util
 from util import getType, plot_and_save, smothing, to_range, get_at_time, multi_timesinc, fit_poly_fun_and_print, project_root_path
 import gps_util
 
@@ -31,8 +33,7 @@ vis_out_path = pathlib.Path("vis_out/")
 mat_files_dir = [pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/testrun_2022_12_17/sensordata/"+p) for p in ["testrun_13_30/", "testrun_14_21/", "testrun_14_41/"]]  # only dirs that contain .mat files for runs on the 2022-12-17 (yyyy-mm-dd)
 csv_files_dir = pathlib.Path("merged_rundata_csv/")
 # csv_files = [pathlib.Path(f) for f in os.listdir(csv_files_dir) if str(f).endswith(".csv")]
-csv_files = [pathlib.Path(f) for f in os.listdir(csv_files_dir) if str(f).endswith(".csv") and str(f).split("-")[
-    0] == "alldata_2022_12_17"]  # only return csv files that were recorded at the 2022-12-17 (yyyy-mm-dd)
+csv_files = [pathlib.Path(f) for f in os.listdir(csv_files_dir) if str(f).endswith(".csv") and str(f).split("-")[0] == "alldata_2022_12_17"]  # only return csv files that were recorded at the 2022-12-17 (yyyy-mm-dd)
 cam_footage_dir = pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/testrun_2022_12_17/cam_footage/")
 cam_sync_files = [cam_footage_dir / pathlib.Path(f) for f in
                   ["sync_info_camL0.txt", "sync_info_camR0.txt", "sync_info_camL3.txt", "sync_info_camR3.txt",
@@ -92,10 +93,25 @@ def k_to_name(k) -> str:
 drone_som_frame = {0:2075, 3:2340}
 camL_som_frame = {0:2610, 3:1281}
 camR_som_frame = {0:2508, 3:1225}
-ssd_som_seconds = {0:54, 3:118}  # lat and long would be syncd between gnss and droneimage if ssd_som_seconds[3] = 120
+ssd_som_seconds = {0:54, 3:120}
 # drone: drone_frnr
 # camL: caml_frnr
 # t: time since start of moving (som)
+# camL3_frnr/20 = drone3_frnr/25-29.56
+# camL3_frnr/20 = camR3_frnr/20-2.78
+# camR3_frnr/20 = drone3_frnr/25-32.34
+def drone2camL(drone3_frnr):
+    return (drone3_frnr/25-29.56)*20
+def camL2drone(camL3_frnr):
+    return (camL3_frnr/20+29.56)*25
+def drone2camR(drone3_frnr):
+    return (drone3_frnr/25-32.34)*20
+def camR2drone(camR3_frnr):
+    return (camR3_frnr/20+32.34)*25
+def camL2camR(camL3_frnr):
+    return camL3_frnr-55.6
+def camR2camL(camR3_frnr):
+    return camR3_frnr+55.6
 def drone2t(drone_frnr: drone_frnr, runid=3) -> som_time_seconds:
     return (drone_frnr - drone_som_frame[runid]) / 25
 def t2drone(t: som_time_seconds, runid=3) -> drone_frnr:
@@ -108,6 +124,9 @@ def ssdt2t(ssdt: seconds, runid=3) -> som_time_seconds:
     return ssdt-ssd_som_seconds[runid]
 def t2ssdt(t: som_time_seconds, runid=3) -> seconds:
     return t+ssd_som_seconds[runid]
+
+
+
 def abs_value(l):
     return np.sqrt(np.sum([t**2 for t in l]))
 
@@ -207,7 +226,7 @@ def plot_colorgradient_carpath(name: str, lat_pos: [gps_util.lattitude], long_po
     # plot carpos (car positions from drone view)
     carposkeys = list(carpos.keys())
     carposkeys.sort()
-    carpos_time = [t2ssdt(drone2t(carposkeys[i]))+2 for i in range(len(carposkeys))]
+    carpos_time = [t2ssdt(drone2t(carposkeys[i])) for i in range(len(carposkeys))]
     carpos_val = [gps_util.carposs_to_gnsspos(carpos[k]) for k in carposkeys]
     ax0.plot([long for (lat, long) in carpos_val], [lat for (lat, long) in carpos_val], color=(0, 0, 0), label="true_position")
 
@@ -861,6 +880,7 @@ def plot_on_googlemaps(points: gps_util.gps_pos_radiant):
 
 
 def get_boundingboxes_keypoints_poii(cam: str, framenr: int, filter=False) -> [(cone_bounding_box, cone_keypoitns, poii_id)]:
+    #TODO if camR3, then get_poii doesnt work and instead bbs contain poi
     bbs = get_boundingboxes(cam, framenr)
     if filter:
         tmp = [(bb, get_cone_keypoints(cam, framenr, i), get_poii(cam, framenr, i)) for (i, bb) in enumerate(bbs)]
@@ -870,7 +890,14 @@ def get_boundingboxes_keypoints_poii(cam: str, framenr: int, filter=False) -> [(
 
 
 def get_boundingboxes(cam: str, framenr: int) -> [cone_bounding_box]:
-    bounding_box_dir = pathlib.Path(f"./vp_labels/{cam}_bb/")
+    # TODO class of bounding box might be poii or color, depoending on if camL3 or camR3
+    if cam in ["camL1", "camL2", "camL3"]:
+        bounding_box_dir = pathlib.Path(f"./vp_labels/{cam}_bb/")
+    elif cam in ["camR1", "camR2", "camR3"]:
+        bounding_box_dir = pathlib.Path(f"./vp_labels/{cam}_poiibb/")
+    else:
+        print(f"invalid cam name {cam} in get_boundingboxes")
+        bounding_box_dir = pathlib.Path(f"./vp_labels/{cam}_bb/")
     bbfiles = [str(f) for f in os.listdir(bounding_box_dir)]
     filename = f"{cam}_frame_{framenr}.txt"
     if filename in bbfiles:
@@ -1346,6 +1373,10 @@ def get_true_carstate():
     vabs_gnss_value = sdd["GNSS_speed_over_ground_UsbFlRec"]
     heading_gnss_time = sdd["GNSS_heading_UsbFlRec"+x_ending]
     heading_gnss_value = sdd["GNSS_heading_UsbFlRec"]*np.pi/180
+    lat_gnss_time = sdd["GNSS_latitude_UsbFlRec"+x_ending]
+    lat_gnss_value = sdd["GNSS_latitude_UsbFlRec"]*np.pi/180
+    lng_gnss_time = sdd["GNSS_longitude_UsbFlRec"+x_ending]
+    lng_gnss_value = sdd["GNSS_longitude_UsbFlRec"]*np.pi/180
     ax_imu_time = sdd["ECU_ACC_X_UsbFlRec"+x_ending]
     ax_imu_value = sdd["ECU_ACC_X_UsbFlRec"]
     ay_imu_time = sdd["ECU_ACC_Y_UsbFlRec"+x_ending]
@@ -1361,6 +1392,7 @@ def get_true_carstate():
     vabs_dv_time = [0.0 for _ in range(len(carposkeys))]
     vabs_dv_value = [0.0 for _ in range(len(carposkeys))]
     vabs_dv_time[0] = t2ssdt(drone2t(carposkeys[0]))-0.001
+
     for i in range(len(carposkeys)-1):
         t0 = t2ssdt(drone2t(carposkeys[i]))
         t1 = t2ssdt(drone2t(carposkeys[i+1]))
@@ -1369,6 +1401,27 @@ def get_true_carstate():
     vabs_dv_value[0], vabs_dv_value[-1] = (0, 0)
     vabs_time, (sincd_vabs_dv_value, sincd_vabs_gps_value) = multi_timesinc([(vabs_dv_time, vabs_dv_value), (vabs_gnss_time, vabs_gnss_value)])
     plot_and_save(visout_praefix+"vabs from gps and drone", x_in=vabs_time, ys=[smothing(vabs_time, sincd_vabs_dv_value, 0.5), sincd_vabs_gps_value], names=["droneview", "gps"])
+
+    # get position from droneview carpositions
+    posn_dv_time = [0.0 for _ in range(len(carposkeys))]
+    posn_dv_value = [0.0 for _ in range(len(carposkeys))]
+    pose_dv_time = [0.0 for _ in range(len(carposkeys))]
+    pose_dv_value = [0.0 for _ in range(len(carposkeys))]
+    gps_base = (lat_gnss_value[0], lng_gnss_value[1])
+    for i, k in enumerate(carposkeys):
+        t = t2ssdt(drone2t(k))
+        pos_dv = gps_util.gps_to_meter(gps_util.carposs_to_gnsspos(carpos[k]), gps_base)
+        posn_dv_time[i] = t
+        pose_dv_time[i] = t
+        posn_dv_value[i] = pos_dv[1]
+        pose_dv_value[i] = pos_dv[0]
+
+    # get meter position from gnss
+    tmp = [gps_util.gps_to_meter((lat, lng), gps_base) for (lat, lng) in zip(lat_gnss_value, lng_gnss_value)]
+    posn_gnss_value = [posn for (pose, posn) in tmp]
+    pose_gnss_value = [pose for (pose, posn) in tmp]
+    posn_gnss_time = lng_gnss_time
+    pose_gnss_time = lat_gnss_time
 
     # derivitate of zip(gnss_vabs_time, gnss_vabs_value)
     smothed_gpsv = smothing(time=vabs_gnss_time, values=vabs_gnss_value, t=1)
@@ -1394,6 +1447,8 @@ def get_true_carstate():
     for i in range(len(carposkeys)):
         heading_droneview_time[i] = t2ssdt(drone2t(carposkeys[i]))
         heading_droneview_value[i] = gps_util.carposs_to_heading(carpos[carposkeys[i]])
+    heading_droneview_time, heading_droneview_value = util.mes_to_time_range(heading_droneview_time, heading_droneview_value, start=120)
+    heading_gnss_time, heading_gnss_value = util.mes_to_time_range(heading_gnss_time, heading_gnss_value, start=120)
     heading_time, (sincd_heading_droneview_value, sincd_heading_gps_value) = multi_timesinc([(heading_droneview_time, heading_droneview_value), (heading_gnss_time, heading_gnss_value)])
     plot_and_save(visout_praefix+"heading from gps and drone", x_in=heading_time, ys=[sincd_heading_droneview_value, np.array([to_range(x) for x in sincd_heading_gps_value])], names=["droneview", "gps"], avgs=False)
 
@@ -1408,37 +1463,27 @@ def get_true_carstate():
     plot_and_save(visout_praefix+"yawrate", x_in=syncd_yawrate_time, ys=[syncd_yawrate_gnss_value, syncd_yawrate_dv_value], names=["yawrate_value", "yawrate_dv_value"], avgs=False)
 
     # get error of odometry:
-    diffs = [("vabs", (vabs_dv_time, vabs_dv_value), (vabs_gnss_time, vabs_gnss_value)), ("yawrate", (yawrate_dv_time, yawrate_dv_value), (yawrate_gnss_time, yawrate_gnss_value))]  # ((a_time, a_value), (b_time, b_value)),
+    smothed_heading_dv_value = smothing(heading_droneview_time, heading_droneview_value, 5)
+    smothed_vabs_dv_value = smothing(vabs_dv_time, vabs_dv_value, 5)
+    smothed_yawrate_dv_value = smothing(yawrate_dv_time, yawrate_dv_value, 5)
+    print("avg(der(heading)) =", np.average([(smothed_heading_dv_value[i+1]-smothed_heading_dv_value[i])**2 for i in range(len(smothed_heading_dv_value)-1)]))
+    print("avg(der(vx)) =", np.average([(smothed_vabs_dv_value[i+1]-smothed_vabs_dv_value[i])**2 for i in range(len(smothed_vabs_dv_value)-1)]))
+    print("avg(der(yawrate)) =", np.average([(to_range(smothed_yawrate_dv_value[i+1]-smothed_yawrate_dv_value[i]))**2 for i in range(len(smothed_yawrate_dv_value)-1)]))
+
+    diffs = [("gnss_posn-true_posn", (posn_gnss_time, posn_gnss_value), (posn_dv_time, posn_dv_value)), ("gnss_pose-true_pose", (pose_gnss_time, pose_gnss_value), (pose_dv_time, pose_dv_value)), ("gnss_heading-true_heading", (heading_gnss_time, heading_gnss_value), (heading_droneview_time, heading_droneview_value))]
+    diffs += [("vabs", (vabs_gnss_time, vabs_gnss_value), (vabs_dv_time, vabs_dv_value)), ("yawrate", (yawrate_gnss_time, yawrate_gnss_value), (yawrate_dv_time, yawrate_dv_value))]  # ((a_time, a_value), (b_time, b_value)),
     som = 118
     eom = som+68
     for (name, (a_time, a_val), (b_time, b_val)) in diffs:
-        som_ai = 0
-        eom_ai = len(a_time)
-        som_bi = 0
-        eom_bi = len(b_time)
-        for i, t in enumerate(a_time):
-            if t > som:
-                som_ai = i
-                break
-        for i, t in enumerate(a_time):
-            if t > eom:
-                eom_ai = i
-                break
-        for i, t in enumerate(b_time):
-            if t > som:
-                som_bi = i
-                break
-        for i, t in enumerate(b_time):
-            if t > eom:
-                eom_bi = i
-                break
-        a_time = a_time[som_ai:eom_ai]
-        a_val = a_val[som_ai:eom_ai]
-        b_time = b_time[som_bi:eom_bi]
-        b_val = b_val[som_bi:eom_bi]
+        a_time, a_val = util.mes_to_time_range(a_time, a_val, som, eom)
+        b_time, b_val = util.mes_to_time_range(b_time, b_val, som, eom)
+
         syncd_name_time, (syncd_a_val, syncd_b_val) = multi_timesinc([(a_time, a_val), (b_time, b_val)])
-        print(f"diff of {name}: syncd_a,b_val type = {getType(syncd_a_val)}, {getType(syncd_b_val)}")
-        name_diff = np.array([abs(g-d) for (g, d) in zip(syncd_a_val, syncd_b_val)])
+        #print(f"diff of {name}: syncd_a,b_val type = {getType(syncd_a_val)}, {getType(syncd_b_val)}")
+        if "heading" in name or "yawrate" in name:
+            name_diff = np.array([to_range(a-b)**2 for (a, b) in zip(syncd_a_val, syncd_b_val)])
+        else:
+            name_diff = np.array([abs(a-b)**2 for (a, b) in zip(syncd_a_val, syncd_b_val)])
         print(f"avg, median({name}_diff) = {np.average(name_diff)}, {np.median(name_diff)}")
         plot_and_save(f"{visout_praefix}diff_{name}_dv_gnss", x_in=syncd_name_time, ys=[name_diff])
 
@@ -1459,7 +1504,7 @@ def get_true_carstate():
          ("yawrate_gnss", yawrate_gnss_time, smothing(yawrate_gnss_time, yawrate_gnss_value, 1))), (("ax_gnss", ax_gnss_time, ax_gnss_value), ("ax_imu", sdd["ECU_ACC_X_UsbFlRec"+x_ending], sdd["ECU_ACC_X_UsbFlRec"]))]
     normalise = True
     # [("vx", vabs_gnss_time, smothing(vabs_gnss_time, vabs_gnss_value, 0.5)), ("der(vabs_gnss)", ax_gnss_time, smothing(ax_gnss_time, ax_gnss_value, 3))]:  # ("aabs_imu", ax_imu_time, imu_aabs_value)
-    for (name_x, time_x, value_x), (name_y, time_y, value_y) in test_correlation:
+    for (name_x, time_x, value_x), (name_y, time_y, value_y) in []:#test_correlation:
         print(f"fit linear function from {name_x} to {name_y}")
         if normalise:
             # normalise values to range [0, 1]
@@ -1526,7 +1571,7 @@ def plot_gnss_vs_droneview():
     poi_true_gps_positions_radiants, carpos = true_pos_from_droneimg_pxpos()
     carposkeys = list(carpos.keys())
     carposkeys.sort()
-    carpos_dv_time = [t2ssdt(drone2t(carposkeys[i]))+2 for i in range(len(carposkeys))]  # carpos_dv_time[i] = carposkeys[i]/25+26.5
+    carpos_dv_time = [t2ssdt(drone2t(carposkeys[i])) for i in range(len(carposkeys))]  # carpos_dv_time[i] = carposkeys[i]/25+26.5
     #carpos_dv_val = [gps_util.average(carpos[k]) for k in carposkeys]
     carpos_dv_val = [gps_util.carposs_to_gnsspos(carpos[k]) for k in carposkeys]
     carpos_heading_dv_val = [gps_util.carposs_to_heading(carpos[k]) for k in carposkeys]
@@ -1592,8 +1637,101 @@ def print_hz(name: str, time: [seconds], value: [float]) -> None:
     #fig.show()
 
 
+def return_numberd_bounding_boxes(img, bbs_keypointss):
+    img_h, img_w, _ = img.shape
+    for (bb, keypoints) in bbs_keypointss:
+        classid, pos_width, pos_hight, width, height = bb
+        color = (255, 0, 0)  # blue
+        if classid == 1:
+            color = (0, 255, 255)  # yelllow
+        cv2.rectangle(img, (int(img_w*pos_width-0.5*img_w*width), int(img_h*pos_hight-0.5*img_h*height)), (int(img_w*pos_width+0.5*img_w*width), int(img_h*pos_hight+0.5*img_h*height)), color, 3)
+        if keypoints is not None:
+            for keypoint in keypoints:
+                cv2.circle(img, (int(img_w*pos_width-0.5*img_w*width+img_w*width*keypoint[0]), int(img_h*pos_hight-0.5*img_h*height+img_h*height*keypoint[1])), 3, color, -1)
+    return img
+
+def generate_synced_video():
+    # add droneview, left camera, right camera and ? into one synced video.
+    path = pathlib.Path("C:/Users/Idefix/PycharmProjects/datasets/testrun_2022_12_17/cam_footage/")
+    #"GNSS_heading_UsbFlRec", "GNSS_latitude_UsbFlRec", "GNSS_longitude_UsbFlRec", "GNSS_speed_over_ground_UsbFlRec",
+    sdd = read_csv("merged_rundata_csv/alldata_2022_12_17-14_43_59_id3.csv")
+    speed_over_ground_val = sdd["GNSS_speed_over_ground_UsbFlRec"]
+    speed_over_ground_time = sdd["GNSS_speed_over_ground_UsbFlRec"+x_ending]
+    heading_val = sdd["GNSS_heading_UsbFlRec"]*np.pi/180
+    heading_time = sdd["GNSS_heading_UsbFlRec"+x_ending]
+    i_cutoff = 0
+    while heading_time[i_cutoff] < ssd_som_seconds[3]:
+        i_cutoff += 1
+    heading_val = heading_val[i_cutoff:]
+    heading_time = heading_time[i_cutoff:]
+    while speed_over_ground_time[i_cutoff] < ssd_som_seconds[3]:
+        i_cutoff += 1
+    speed_over_ground_val = speed_over_ground_val[i_cutoff:]
+    speed_over_ground_time = speed_over_ground_time[i_cutoff:]
+    current_v_index = 0
+    current_heading_index = 0
+    size = (960, 540)# screen-size=1920x1080
+    video = cv2.VideoWriter('video.avi',cv2.VideoWriter_fourcc(*'XVID'),20.0,(2*size[0],2*size[1]))
+
+    for camL3_frnr in range(1280, 2660):
+        if camL3_frnr % 100 == 0:
+            print("camL3_frnr =", camL3_frnr)
+        t = t2ssdt(camL2t(camL3_frnr))
+        camR3_frnr = int(camL2camR(camL3_frnr))
+        drone_frnr = int(camL2drone(camL3_frnr))
+        # read images
+        #C:\Users\Idefix\PycharmProjects\datasets\testrun_2022_12_17\cam_footage\left_cam_14_46_00\camL3_frame_1280.jpg
+        #C:\Users\Idefix\PycharmProjects\datasets\testrun_2022_12_17\cam_footage\left_cam_14_46_00\camL3_frame_1281.jpg
+        drone_img = cv2.imread(str(path/f"DJI_0456_frames/drone3_frame_{drone_frnr}.jpg"))
+        camL3_img = cv2.imread(str(path/f"left_cam_14_46_00/camL3_frame_{camL3_frnr}.jpg"))
+        camR3_img = cv2.imread(str(path/f"right_cam_14_46_00/camR3_frame_{camR3_frnr}.jpg"))
+        camR3_img = cv2.rotate(camR3_img, cv2.ROTATE_180)
+        # generate custom image
+        while heading_time[current_heading_index] < t:
+            current_heading_index += 1
+        while speed_over_ground_time[current_v_index] < t:
+            current_v_index += 1
+        fig, axe = plt.subplots()
+        axe.plot(speed_over_ground_time[:current_v_index], speed_over_ground_val[:current_v_index], label="speed")
+        axe.plot(heading_time[:current_heading_index], heading_val[:current_heading_index], label="heading")
+        axe.plot(speed_over_ground_time[current_v_index:], speed_over_ground_val[current_v_index:], color="gray")
+        axe.plot(heading_time[current_heading_index:], heading_val[current_heading_index:], color="gray")
+        axe.set_xlabel("time in seconds")
+        axe.set_ylabel("m/s | radiants")
+        axe.legend()
+        axe.grid()
+        fig.canvas.draw()
+        base_custom_img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        base_custom_img = base_custom_img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        plt.close(fig)
+        # to size
+        drone_img = cv2.resize(drone_img, size)
+        camL3_img = cv2.resize(camL3_img, size)
+        camR3_img = cv2.resize(camR3_img, size)
+        custom_img = cv2.resize(base_custom_img, size)
+
+        # draw bbs and keypoints into images
+        bbs_keypoints_left = [(bb, kp) for (bb, kp, poii) in get_boundingboxes_keypoints_poii("camL3", camL3_frnr, False)]
+        camL3_img = return_numberd_bounding_boxes(camL3_img, bbs_keypoints_left)
+        bbs_keypoints_right = [((poii2cls(poii), posw, posh, sizew, sizeh), kp) for ((poii, posw, posh, sizew, sizeh), kp, _) in get_boundingboxes_keypoints_poii("camR3", camR3_frnr, False)]
+        camR3_img = return_numberd_bounding_boxes(camR3_img, bbs_keypoints_right)
+        # add images to singe image
+        top_image = np.concatenate((camL3_img, camR3_img), axis=1)
+        bot_image = np.concatenate((drone_img, custom_img), axis=1)
+        total_image = np.concatenate((top_image, bot_image), axis=0)
+        #cv2.imshow("total_image", total_image)
+        #cv2.waitKey(0)
+        # add to video
+        video.write(total_image)
+    print("finished")
+    # save video
+    video.release()
+
+
+
+
 def main():
-    #sdd = read_csv("merged_rundata_csv/alldata_2022_12_17-14_43_59_id3.csv")
+    #generate_synced_video()
     #visualise_data(sdd)
     #plot_gnss_vs_droneview()
     #test_slamfrontend()

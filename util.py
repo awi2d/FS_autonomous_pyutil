@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.optimize
 
-project_root_path = pathlib.Path("C:/Users/johan/PycharmProjects/FS_autonomous_pyutil/")
+#project_root_path = pathlib.Path("C:/Users/johan/PycharmProjects/FS_autonomous_pyutil/")
+project_root_path = pathlib.Path("C:/Users/Idefix/PycharmProjects/tmpProject/")
 def getType(x):
     """
     :param x:
@@ -116,6 +117,22 @@ def to_range(x):
     return x
 
 
+def mes_to_time_range(mes_time, mes_value, start=None, stop=None):
+    if start is not None:
+        for i in range(len(mes_time)):
+            if mes_time[i] > start:
+                mes_time = mes_time[i:]
+                mes_value = mes_value[i:]
+                break
+    if stop is not None:
+        for i in range(len(mes_time)-1, 0, -1):
+            if mes_time[i] < stop:
+                mes_time = mes_time[:i]
+                mes_value = mes_value[:i]
+                break
+    return mes_time, mes_value
+
+
 def get_at_time(x: [seconds], y: [float], t: seconds) -> (float, int):
     # returns the linear interpolated value of y at time t and nearest index
     # if t in x: return y[i], so that x[i]==t
@@ -126,7 +143,8 @@ def get_at_time(x: [seconds], y: [float], t: seconds) -> (float, int):
             return y[0], 0
         if t > x[-1]:
             return y[-1], len(y)
-    for i in range(0, len(x)):
+    i_start = max(0, [tmp_index for tmp_index, tmp_time in enumerate(x) if tmp_time > t][0]-1)
+    for i in range(i_start, len(x)):
         if t == x[i]:
             return y[i], i
         if t < x[i]:

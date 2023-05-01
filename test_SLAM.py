@@ -3,8 +3,11 @@ import pathlib
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+import show_sensorlogs
+import util
 from util import getType, plot_and_save, smothing, to_range, get_at_time
-from show_sensorlogs import read_csv, x_ending, true_pos_from_droneimg_pxpos, visual_pipeline, plot_cones, camL2t, get_synced_frame, poii_bluecones_range, poii_yellowcones_range,get_boundingboxes_keypoints_poii, custom_PnP, t2ssdt, drone2t, ssdt2t, t2drone
+from show_sensorlogs import read_csv, x_ending, true_pos_from_droneimg_pxpos, visual_pipeline, plot_cones, camL2t, get_synced_frame, poii_bluecones_range, poii_yellowcones_range,get_boundingboxes_keypoints_poii, custom_PnP, t2ssdt, drone2t, ssdt2t, t2drone, camL2drone
 import gps_util
 
 vis_out_path = pathlib.Path("vis_out_slam/")
@@ -436,101 +439,146 @@ def test_slamfrontend():
     fig.savefig(vis_out_path/"frontend_data_association.png")
 
 
-def read_g2o_graphsave(name: str, time_of_save: str = "after"):
-    path = "C:/Users/johan/PycharmProjects/FS_autonomous_pyutil/g2o_res/"
+def read_g2o_graphsave(name: str):
+    #path = "C:/Users/Idefix/PycharmProjects/tmpProject/g2o_res/"
+    path = "C:/Users/Idefix/CLionProjects/state_estimator/cmake-build-debug/"  # TODO
     # return the factor graph stored by g2o.
-    conevertex_metainfo = {}
-    with open(f"{path}/{name}conevertex_metainfo.txt") as f:
-        for line in f.readlines():
-            (coneid, information, color) = line.split(",")
-            conevertex_metainfo[int(coneid)] = (float(information), int(color))
 
-    file = pathlib.Path(f"{path}/{name}_{time_of_save}.g2o")
+    if not name.endswith(".g2o"):
+        name += ".g2o"
+    file = pathlib.Path(f"{path}/{name}")
+    print(f"read g2o graph from {file}")
     vertex_se2 = {}
     vertex_point_xy = {}
     edge_se2 = set()
     edge_se2_pointxy = set()
+    edge_se2_prior = set()
     with open(file) as f:
-        # TUTORIAL_PARAMS_SE2_OFFSET 0 0 0 0
-        # TUTORIAL_VERTEX_SE2 id posx posy heading
-        # TUTORIAL_VERTEX_POINT_XY id posx posy
-        # TUTORIAL_EDGE_SE2 0 1 18.0584 -0.870688 2.67041 2.50361 0 0 2.50361 0 4109.14
-        # TUTORIAL_EDGE_SE2_POINT_XY 1 2 0 1.1884 -1.02397 -157.32 0 -157.32
         for line in f.readlines()[1:]:
-            s = line.split(" ")
-            if s[0] == "TUTORIAL_VERTEX_SE2":
-                assert len(s) == 5
-                vertex_se2[int(s[1])] = (float(s[2]), float(s[3]), float(s[4]))  # id: posn, pose, heading
-            elif s[0] == "TUTORIAL_VERTEX_POINT_XY":
-                assert len(s) == 4
-                key = int(s[1])
-                vertex_point_xy[key] = (float(s[2]), float(s[3]), conevertex_metainfo[key][1], conevertex_metainfo[key][0])  # id: posn, pose, color, (negative)information
-            elif s[0] == "TUTORIAL_EDGE_SE2":
-                assert len(s) == 12
-                tmp = (int(s[1]), int(s[2]), float(s[3]), float(s[4]), float(s[5]), float(s[6]), float(s[7]), float(s[8]), float(s[9]))  # vertex_from, vertex_to, constraint_posx, constraint_posy, constraint_heading, 6 unknown values
-                edge_se2.add(tmp)
-            elif s[0] == "TUTORIAL_EDGE_SE2_POINT_XY":
+            s = line.strip().split(" ")
+            if s[0] == "VERTEX_CarPose":
+                #Eigen::Vector3d p = estimate().toVector();
+                #os << pos[0] << " " << pos[1] << " " << pos[2] << " " << odo[0] << " " << odo[1] << " " << odo[2] << " " << this->camL3_frnr;
                 assert len(s) == 9
-                tmp = (int(s[1]), int(s[2]), float(s[3]), float(s[4]), float(s[5]), float(s[6]), float(s[7]), float(s[7]))  # vertex_from, vertex_to, constraint_posx, constraint_posy, 4 unknown values
+                vertex_se2[int(s[1])] = (float(s[2]), float(s[3]), float(s[4]), float(s[5]), float(s[6]), float(s[7]), int(s[8]))  # id: posn, pose, heading, vx, vy, yawrate, camL3_frnr
+            elif s[0] == "VERTEX_ConePos":
+                #os << this->_estimate[0] << " " << this->_estimate[1] << " " << this->color << " " << this->negativeInformation;
+                assert len(s) == 6
+                vertex_point_xy[int(s[1])] = (float(s[2]), float(s[3]), int(s[4]), float(s[5]))  # id: posn, pose, color, negativeInformation
+            elif s[0] == "EDGE_Odometry":
+                # for (vertexid_0, vertexid_1, time) in edge_se2
+                assert len(s) == 25
+                tmp = (int(s[1]), int(s[2]), float(s[3]))  # vertex_from, vertex_to, time, 21 information (symetric 6x6 matrix)
+                edge_se2.add(tmp)
+            elif s[0] == "EDGE_VisDet":
+                # for (vertex_carpose_id, vertex_conepos_id, constraint_posx, constraint_posy) in edge_se2_pointxy
+                assert len(s) == 8
+                tmp = (int(s[1]), int(s[2]), float(s[3]), float(s[4]))  # vertex_from, vertex_to, constraint_posx, constraint_posy, 3 information (symetric 3x3 matrix)
                 edge_se2_pointxy.add(tmp)
+            elif s[0] == "EDGE_GNSS":
+                # for (vertex_carpose_id, mpos_n, mpos_e, heading, vx, vy, yawrate) in edge_gnss
+                assert len(s) == 29
+                tmp = (int(s[1]), float(s[2]), float(s[3]), float(s[4]), float(s[5]), float(s[6]), float(s[7]))  # vertex_id, mpos_n, mpos_e, heading, vx, vy, yawrate, 21 information (symetric 6x6 matrix)
+                edge_se2_prior.add(tmp)
             else:
                 if line not in ["FIX 0\n"]:
                     print(f"ERROR: line = {line} could not be parsed by read_g2o_graphsave({file}")
-
-    # vertex_se2[key] = (pos_north, pos_east, heading)
-    # vertex_point_xy[key] = (pos_north, pos_east, color, (negative)information)
-    # edge_se2 = (key0, key1, distance, distance_quer, headingdiff, 6 ?information values)
-    # edge_se2_pointxy = (key0, key1, distance, distance_quer, 4 ? information valuse)
-    return vertex_se2, vertex_point_xy, edge_se2, edge_se2_pointxy
+    return vertex_se2, vertex_point_xy, edge_se2, edge_se2_pointxy, edge_se2_prior
 
 def display_g2o_graph(name: str):
     poi_true_gps_positions_radiants, true_carposes = true_pos_from_droneimg_pxpos()
-    poi_true_mpos = [gps_util.gps_to_meter(tgp, (0.8982182491908725, 0.11761678938800951)) for tgp in poi_true_gps_positions_radiants[poii_bluecones_range[0]:]]
-    for time_of_save in ["after"]:  # "before", "optimised",
-        vertex_se2, vertex_point_xy, edge_se2, edge_se2_pointxy = read_g2o_graphsave(name, time_of_save)
+    gps_base = (0.898220, 0.117615)
+    poi_true_mpos = [gps_util.gps_to_meter(tgp, gps_base) for tgp in poi_true_gps_positions_radiants[poii_bluecones_range[0]:]]
+    vertex_carPose, vertex_conePos, edge_odometry, edge_visdet, edge_gnss = read_g2o_graphsave(name)
 
-        print(f"\nname time_of_save = {name} {time_of_save}")
-        print("vertex_se2 =", len(vertex_se2))
-        print("vertex_point_xy =", len(vertex_point_xy))
-        print("edge_se2 =", len(edge_se2))
-        print("edge_se2_pointxy =", len(edge_se2_pointxy))
+    print(f"\nname time_of_save = {name}")
+    print("VERTEX_CarPose =", len(vertex_carPose))
+    print("VERTEX_ConePos =", len(vertex_conePos))
+    print("EDGE_Odometry =", len(edge_odometry))
+    print("EDGE_VisDet =", len(edge_visdet))
+    print("EDGE_GNSS =", len(edge_gnss))
+    num_odconst = {}
+    num_gnssconst = {}
+    num_visdet_constse2 = {}
+    for k in vertex_carPose.keys():
+        num_odconst[k] = 0
+        num_gnssconst[k] = 0
+        num_visdet_constse2[k] = 0
 
-        carpose_keys = list(vertex_se2.keys())
-        carpose_keys.sort()
-        fig, axe = plt.subplots()
-        axe.set_title(f"g2o graph {name} at {time_of_save}")
-        for vp in edge_se2_pointxy:
-            if vp[1] in [1, 2]:
-                p0, p1 = vertex_se2[vp[0]], vertex_point_xy[vp[1]]
-                axe.plot([p0[1], p1[1]], [p0[0], p1[0]], color="red")
-        for odometry in edge_se2:
-            if odometry[0] != 0:  # dont map GNSS constraint
-                p0, p1 = vertex_se2[odometry[0]], vertex_se2[odometry[1]]
-                axe.plot([p0[1], p1[1]], [p0[0], p1[0]], color="green")
-        axe.scatter([pose for (posn, pose) in poi_true_mpos], [posn for (posn, pose) in poi_true_mpos], marker='x', color="black")
-        axe.scatter([vertex_se2[k][1] for k in carpose_keys], [vertex_se2[k][0] for k in carpose_keys], color="black", label="car poses", s=2)
+    num_visdet_constxy = {}
+    for k in vertex_conePos.keys():
+        num_visdet_constxy[k] = 0
+    for (vertexid_0, vertexid_1, time) in edge_odometry:
+        num_odconst[vertexid_0] += 1
+        num_odconst[vertexid_1] += 1
+    for (vertex_id, mpos_n, mpos_e, heading, vx, vy, yawrate) in edge_gnss:
+        num_gnssconst[vertex_id] += 1
+    for (vertex_from, vertex_to, constraint_posx, constraint_posy) in edge_visdet:
+        num_visdet_constse2[vertex_from] += 1
+        num_visdet_constxy[vertex_to] += 1
+    num_odconst = [num_odconst[k] for k in num_odconst.keys()]
+    num_gnssconst = [num_gnssconst[k] for k in num_gnssconst.keys()]
+    num_visdet_constse2 = [num_visdet_constse2[k] for k in num_visdet_constse2.keys()]
+    num_visdet_constxy = [num_visdet_constxy[k] for k in num_visdet_constxy.keys()]
+    num_odconst_t = [0 for _ in range(max(num_odconst)+1)]
+    for i in num_odconst:
+        num_odconst_t[i] += 1
+    num_gnssconst_t = [0 for _ in range(max(num_gnssconst)+1)]
+    for i in num_gnssconst:
+        num_gnssconst_t[i] += 1
+    num_visdet_constse2_t = [0 for _ in range(max(num_visdet_constse2)+1)]
+    for i in num_visdet_constse2:
+        num_visdet_constse2_t[i] += 1
+    num_visdet_constxy_t = [0 for _ in range(max(num_visdet_constxy+[0])+1)]
+    for i in num_visdet_constxy:
+        num_visdet_constxy_t[i] += 1
+    print("odometry constraints on carposes: ", num_odconst_t)
+    print("gnss constraints on carposes: ", num_gnssconst_t)
+    print("visdet on carpose", num_visdet_constse2_t)
+    print("visdet on conepos", num_visdet_constxy_t)
 
-        cone_abspos = [(vertex_point_xy[k], vertex_point_xy[k][2]) for k in vertex_point_xy.keys()]
-        cone_abspos = [(pos, 0) for pos in k_means_cone_clustering([(vertex_point_xy[k][3], np.array([vertex_point_xy[k][0], vertex_point_xy[k][1]])) for k in vertex_point_xy.keys()])]
-        print("vertex_point_xy_clusterd =", len(cone_abspos))
+    print(f"Vertex_CarPose: ")
+    carpose_keys = list(vertex_carPose.keys())
+    carpose_keys.sort()
+    fig, axe = plt.subplots()
+    axe.set_title(f"g2o graph {name}")
 
-        axe.scatter([pose for ((posn, pose), cls) in cone_abspos], [posn for ((posn, pose), cls) in cone_abspos], color=["blue" if cls==0 else "yellow" for ((posn, pose), cls) in cone_abspos], label="conepos")
-        #axe.scatter([pose for (posn, pose) in clustered_cone_abspos], [posn for (posn, pose) in clustered_cone_abspos], color="yellow", label="clustered conepos")
-        # plot true path
-        true_carpose_keys = list(true_carposes.keys())
-        true_carpose_keys.sort()
-        true_carmpos = [gps_util.gps_to_meter(gps_util.carposs_to_gnsspos(true_carposes[k]), gps_base) for k in true_carpose_keys]
-        axe.plot([pose for (posn, pose) in true_carmpos], [posn for (posn, pose) in true_carmpos], color="black", label="true car path")
-        axe.grid()
-        axe.legend()
-        fig.savefig(vis_out_path/f"slam_{name}_{time_of_save}.png")
-        fig.show()
-        return map_dist([abspos for (abspos, cls) in cone_abspos if cls == 0])
+    # true cone position and car pose
+    axe.scatter([pose for (posn, pose) in poi_true_mpos], [posn for (posn, pose) in poi_true_mpos], marker='x', color="black")
+
+    #estimated car path, vis_det with orange cones, and gnss_measurements
+    for (vertexid_0, vertexid_1, time) in edge_odometry:
+        p0, p1 = vertex_carPose[vertexid_0], vertex_carPose[vertexid_1]
+        #p0 = (posn, pose, heading, vx, vy, yawrate, camL3_frnr)
+        axe.plot([p0[1], p1[1]], [p0[0], p1[0]], color="green")
+    axe.scatter([vertex_carPose[k][1] for k in carpose_keys], [vertex_carPose[k][0] for k in carpose_keys], color="green", label="car poses", s=2)
+    for (vertex_carpose_id, vertex_conepos_id, constraint_posx, constraint_posy) in edge_visdet:
+        if vertex_conepos_id in [1, 2]:
+            p0, p1 = vertex_carPose[vertex_carpose_id], vertex_conePos[vertex_conepos_id]
+            axe.plot([p0[1], p1[1]], [p0[0], p1[0]], color="red")
+    for (vertex_carpose_id, mpos_n, mpos_e, heading, vx, vy, yawrate) in edge_gnss:
+        p1 = vertex_carPose[vertex_carpose_id]
+        axe.plot([p1[1], mpos_e], [p1[0], mpos_n], color="yellow")
+        axe.scatter([p1[1], mpos_e], [p1[0], mpos_n], color="yellow")
+    # estimated cone positions
+    cone_abspos = [((vertex_conePos[k][0], vertex_conePos[k][1]), vertex_conePos[k][2]) for k in vertex_conePos.keys()]  # vertex_conePos[id] = posn, pose, color
+    axe.scatter([pose for ((posn, pose), cls) in cone_abspos], [posn for ((posn, pose), cls) in cone_abspos], color=["blue" if cls==0 else "yellow" for ((posn, pose), cls) in cone_abspos], label="conepos")
+
+    # plot true path
+    true_carpose_keys = list(true_carposes.keys())
+    true_carpose_keys.sort()
+    true_carmpos = [gps_util.gps_to_meter(gps_util.carposs_to_gnsspos(true_carposes[k]), gps_base) for k in true_carpose_keys]
+    axe.plot([pose for (posn, pose) in true_carmpos], [posn for (posn, pose) in true_carmpos], color="black", label="true car path")
+    axe.grid()
+    axe.legend()
+    fig.savefig(vis_out_path/f"slam_{name}.png")
+    fig.show()
+    #return map_dist([abspos for (abspos, cls) in cone_abspos if cls == 0])
 
 
 def get_map_dist(slam_name, speedmult):
     name = slam_name+"_"+str(speedmult)
-    vertex_se2, vertex_point_xy, edge_se2, edge_se2_pointxy = read_g2o_graphsave(name, "after")
+    vertex_se2, vertex_point_xy, edge_se2, edge_se2_pointxy, edge_se2_prior = read_g2o_graphsave(name)
     cone_abspos = [(pos, 0) for pos in k_means_cone_clustering([(vertex_point_xy[k][3], np.array([vertex_point_xy[k][0], vertex_point_xy[k][1]])) for k in vertex_point_xy.keys()])]
     (truepositive, falsenegative, falsepositive, avg_dist) = map_dist([abspos for (abspos, cls) in cone_abspos if cls == 0])
     return (truepositive, falsenegative, falsepositive, get_path_dist(vertex_se2, speedmult))
@@ -646,8 +694,73 @@ def odometry_error():
         old_carpose = carmpos_dv
 
 
+def heading_error_in_g2o(name="full_1"):
+    #camL3_frnr=1280; camL3_frnr<2643
+    vertex_se2, vertex_point_xy, edge_se2, edge_se2_pointxy, edge_se2_prior = read_g2o_graphsave(name)
+    #vertex_se2[id] = (posn, pose, heading)
+    poi_true_gps_positions_radiants, carpos = true_pos_from_droneimg_pxpos()
+    true_heading = [(k, gps_util.carposs_to_heading(carpos[k])) for k in carpos.keys()]
+    true_heading.sort(key=lambda x:x[0])
+    true_heading_dvfrnr = [k for (k, heading) in true_heading]
+    true_heading_val = [heading for (k, heading) in true_heading]
+
+    sdd = read_csv("merged_rundata_csv/alldata_2022_12_17-14_43_59_id3.csv")
+    #"GNSS_heading_UsbFlRec", "GNSS_latitude_UsbFlRec", "GNSS_longitude_UsbFlRec", "GNSS_speed_over_ground_UsbFlRec",
+    gnss_heading_value = sdd["GNSS_heading_UsbFlRec"]*np.pi/180
+    gnss_heading_time = sdd["GNSS_heading_UsbFlRec"+x_ending]
+    gnss_vabs_value = sdd["GNSS_speed_over_ground_UsbFlRec"]
+    gnss_vabs_time = sdd["GNSS_speed_over_ground_UsbFlRec"+x_ending]
+
+    diff = []
+    vertexse2_g2oids = list(vertex_se2.keys())
+    vertexse2_g2oids.sort()
+    camL3frnr_true_path = []
+    ssd_time, (true_heading_value_syncd, gnss_heading_value_syncd, gnss_vabs_value_syncd) = util.multi_timesinc([([t2ssdt(show_sensorlogs.drone2t(drone_frnr)) for drone_frnr in true_heading_dvfrnr], true_heading_val), (gnss_heading_time, gnss_heading_value), (gnss_vabs_time, gnss_vabs_value)])
+    i = 0
+    for g2o_id in vertexse2_g2oids:
+        (posn, pose, heading, vx, vy, yawrate, camL3_frnr) = vertex_se2[g2o_id]
+        t = t2ssdt(camL2t(camL3_frnr))
+        while ssd_time[i] < t:
+            i += 1
+        true_heading = true_heading_value_syncd[i]
+        gnss_heading = gnss_heading_value_syncd[i]
+        gnss_vabs = gnss_vabs_value_syncd[i]
+
+        if camL3_frnr > 1700:
+            diff.append(abs(true_heading-heading))
+        #print(f"carpose[{camL3_frnr}] = {path_heading}, true_heading[{drone_frnr}] = {true_heading}")
+        camL3frnr_true_path.append((camL3_frnr, true_heading, to_range(gnss_heading), heading, gnss_vabs, vx, vy))
+    print("diff =", np.average(diff))
+    print("diff**2 =", np.average([d**2 for d in diff]))
+    time = [camL3_frnr for (camL3_frnr, true_heading, gnss_heading, heading, gnss_vabs, vx, vy) in camL3frnr_true_path]
+    true_heading = [true_heading for (camL3_frnr, true_heading, gnss_heading, heading, gnss_vabs, vx, vy) in camL3frnr_true_path]
+    gnss_heading = [gnss_heading for (camL3_frnr, true_heading, gnss_heading, heading, gnss_vabs, vx, vy) in camL3frnr_true_path]
+    path_heading = [heading for (camL3_frnr, true_heading, gnss_heading, heading, gnss_vabs, vx, vy) in camL3frnr_true_path]
+    gnss_vabs = [gnss_vabs for (camL3_frnr, true_heading, gnss_heading, heading, gnss_vabs, vx, vy) in camL3frnr_true_path]
+    vx = [vx for (camL3_frnr, true_heading, gnss_heading, heading, gnss_vabs, vx, vy) in camL3frnr_true_path]
+    fig, axe = plt.subplots()
+    axe.set_title(f"heading from droneview and g2o optimised graph name={name}")
+    axe.plot(time, true_heading, label="true heading")
+    axe.plot(time, gnss_heading, label="gnss heading")
+    axe.plot(time, path_heading, label="path heading")
+    axe.plot(time, vx, label="path vx")
+    axe.plot(time, gnss_vabs, label="gnss vx")
+    axe.legend()
+    axe.grid()
+    axe.set_xlabel("camL3_frnr")
+    axe.set_ylabel("heading")
+    fig.savefig(vis_out_path/"heading_dv_g2o.png")
+    fig.show()
+
+
 def main():
-    display_g2o_graph("full_1")
+    name = "slam_True_Flse_Flse__before.g2o"
+    #heading_error_in_g2o(name)
+    display_g2o_graph(name)
+    name = "slam_True_Flse_Flse__after.g2o"
+    heading_error_in_g2o(name)
+    display_g2o_graph(name)
+
     exit(0)
     # plot SLAM truepositive over speedmult
     g2o_slam_speedmulti_scores = {}
