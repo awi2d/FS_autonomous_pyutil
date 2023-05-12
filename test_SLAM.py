@@ -754,10 +754,11 @@ def heading_error_in_g2o(name="full_1"):
 
 
 def main():
-    name = "slam_True_Flse_Flse__before.g2o"
+    #name = "slam_True_Flse_Flse__before.g2o"
+    name = "slam_True_True_Flse__before.g2o"
     #heading_error_in_g2o(name)
     display_g2o_graph(name)
-    name = "slam_True_Flse_Flse__after.g2o"
+    name = "slam_True_True_Flse__after.g2o"
     heading_error_in_g2o(name)
     display_g2o_graph(name)
 
